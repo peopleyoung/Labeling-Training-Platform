@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12 -X utf8 .codex/hooks/inject-workflow-state.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+node_modules/
+.venv/
+.runtime/
+dist/
+test-results/
+playwright-report/
+.env
+backups/
+*.tsbuildinfo
+.DS_Store
+
+# Local review inputs and per-developer Trellis journals
+c2ea9806-3df3-4438-b4b3-cfa669e71d8c.jpeg
+.trellis/workspace/
+__pycache__/
+*.pyc

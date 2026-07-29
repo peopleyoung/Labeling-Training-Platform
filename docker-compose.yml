@@ -1,0 +1,155 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: forge
+      POSTGRES_USER: forge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forge-local-password}
+    volumes:
+      - forge-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forge -d forge"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - forge-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-forge-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-forge-minio-password}
+    ports:
+      - "${MINIO_CONSOLE_BIND:-127.0.0.1}:${MINIO_CONSOLE_PORT:-19001}:9001"
+    volumes:
+      - forge-minio:/data
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    environment:
+      API_PORT: 4000
+      DATABASE_URL: postgresql://forge:${POSTGRES_PASSWORD:-forge-local-password}@postgres:5432/forge
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?Set BOOTSTRAP_ADMIN_PASSWORD in .env}
+      BOOTSTRAP_ADMIN_DISPLAY_NAME: ${BOOTSTRAP_ADMIN_DISPLAY_NAME:-平台管理员}
+      ALLOW_WEAK_BOOTSTRAP_PASSWORD: ${ALLOW_WEAK_BOOTSTRAP_PASSWORD:-false}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5174}
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: forge-artifacts
+      FORGE_ARTIFACT_ROOT: /data/artifacts
+      FORGE_GPU_ENABLED: ${FORGE_GPU_ENABLED:-false}
+      FORGE_CPU_TRAINING_ENABLED: ${FORGE_CPU_TRAINING_ENABLED:-true}
+      FORGE_CPU_ONNX_ENABLED: ${FORGE_CPU_ONNX_ENABLED:-true}
+    command: sh -c "npm run db:migrate && npm run db:seed && npm run start:api"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${API_BIND:-0.0.0.0}:${API_PUBLIC_PORT:-4000}:4000"
+    volumes:
+      - forge-worker-data:/data
+
+  export-worker:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: npm run start:worker
+    environment:
+      DATABASE_URL: postgresql://forge:${POSTGRES_PASSWORD:-forge-local-password}@postgres:5432/forge
+      REDIS_URL: redis://redis:6379
+      FORGE_QUEUE_NAME: forge-export
+      FORGE_ARTIFACT_ROOT: /data/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - forge-worker-data:/data
+
+  cpu-worker:
+    build:
+      context: .
+      dockerfile: docker/cpu-worker.Dockerfile
+    command: npm run start:worker
+    environment:
+      DATABASE_URL: postgresql://forge:${POSTGRES_PASSWORD:-forge-local-password}@postgres:5432/forge
+      REDIS_URL: redis://redis:6379
+      FORGE_QUEUE_NAME: forge-cpu
+      FORGE_EXECUTION_DEVICE: cpu
+      FORGE_ARTIFACT_ROOT: /data/artifacts
+      FORGE_MODEL_CACHE: /data/model-cache
+      FORGE_PRETRAINED_OFFLINE: ${FORGE_PRETRAINED_OFFLINE:-false}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - forge-worker-data:/data
+
+  worker:
+    profiles: [gpu]
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    environment:
+      DATABASE_URL: postgresql://forge:${POSTGRES_PASSWORD:-forge-local-password}@postgres:5432/forge
+      REDIS_URL: redis://redis:6379
+      NVIDIA_VISIBLE_DEVICES: all
+      FORGE_QUEUE_NAME: forge-gpu
+      FORGE_EXECUTION_DEVICE: gpu
+      FORGE_ARTIFACT_ROOT: /data/artifacts
+      FORGE_MODEL_CACHE: /data/model-cache
+      FORGE_PRETRAINED_OFFLINE: ${FORGE_PRETRAINED_OFFLINE:-false}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+      FORGE_SDXL_BASE_MODEL: ${FORGE_SDXL_BASE_MODEL:-/data/model-cache/stable-diffusion-xl-base-1.0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 2
+              capabilities: [gpu]
+    volumes:
+      - forge-worker-data:/data
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:4000/api/v1}
+    depends_on:
+      - api
+    ports:
+      - "${WEB_BIND:-0.0.0.0}:${WEB_PORT:-5174}:5173"
+
+volumes:
+  forge-postgres:
+  forge-redis:
+  forge-minio:
+  forge-worker-data:
