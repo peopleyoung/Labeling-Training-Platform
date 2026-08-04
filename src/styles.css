@@ -57,10 +57,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .brand strong { display: block; font-size: 14px; line-height: 1.1; color: white; }
 .brand small { display: block; margin-top: 3px; font-size: 8px; color: #7f93a5; letter-spacing: 1.6px; }
 .sidebar-close { display: none; margin-left: auto; color: #c9d4de !important; }
-.workspace-switch { min-height: 62px; display: grid; grid-template-columns: 34px 1fr auto; gap: 9px; align-items: center; margin: 8px 2px 20px; padding: 9px; background: var(--sidebar-soft); border: 1px solid #293b49; border-radius: 7px; }
-.workspace-avatar { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 6px; background: #25445f; color: #9bd8ff; font-size: 13px; font-weight: 700; }
-.workspace-switch span, .sidebar-user span { display: block; color: #f4f7fa; font-size: 13px; font-weight: 600; }
-.workspace-switch small, .sidebar-user small { display: block; color: #8092a2; font-size: 10px; margin-top: 3px; }
+.sidebar-user span { display: block; color: #f4f7fa; font-size: 13px; font-weight: 600; }
+.sidebar-user small { display: block; color: #8092a2; font-size: 10px; margin-top: 3px; }
 .main-nav { display: flex; flex-direction: column; gap: 4px; }
 .nav-item, .utility-nav button { min-height: 42px; display: flex; align-items: center; gap: 11px; padding: 0 11px; border: 0; border-radius: 6px; color: #97a9b8; background: transparent; font-size: 13px; font-weight: 550; text-align: left; cursor: pointer; transition: 160ms ease; }
 .nav-item:hover, .utility-nav button:hover { color: white; background: #16242f; }
@@ -259,6 +257,13 @@ kbd { padding: 2px 6px; border: 1px solid #d2dbe3; border-radius: 4px; color: #7
 .dataset-status { display: block; width: max-content; margin-top: 4px; font-size: 8px; }
 .dataset-status.标注中 { color: var(--primary); }.dataset-status.可训练 { color: var(--green); }.dataset-status.待审核 { color: var(--orange); }
 .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+.pagination { min-height: 52px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 9px 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 9px; }
+.pagination-summary, .pagination-controls, .pagination-summary label { display: flex; align-items: center; gap: 8px; }
+.pagination-summary select { height: 30px; padding: 0 25px 0 9px; color: var(--text-soft); background: white; border: 1px solid var(--border); border-radius: 5px; font-size: 9px; }
+.pagination-controls > span { min-width: 76px; color: var(--text-soft); text-align: center; }
+.pagination-controls strong { color: var(--text); }
+.pagination-controls .icon-button { width: 30px; height: 30px; }
+.pagination-controls .icon-button:disabled { opacity: .38; cursor: not-allowed; }
 .dataset-readiness-band, .registry-band { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; padding: 13px 16px; background: #eef5ff; border: 1px solid #cfe0f7; border-radius: var(--radius); }
 .dataset-readiness-band > div { display: flex; align-items: center; gap: 11px; }
 .band-icon { width: 36px; height: 36px; display: grid; place-items: center; flex: 0 0 auto; color: var(--primary); background: white; border-radius: 6px; }
@@ -405,8 +410,8 @@ kbd { padding: 2px 6px; border: 1px solid #d2dbe3; border-radius: 4px; color: #7
 @media (max-width: 1180px) {
   .app-shell { grid-template-columns: 76px minmax(0, 1fr); }
   .sidebar { padding-inline: 9px; }
-  .brand { justify-content: center; }.brand > div:not(.brand-mark), .workspace-switch > div:nth-child(2), .workspace-switch > svg, .nav-item span, .utility-nav button, .sidebar-user > div:nth-child(2), .sidebar-user > svg { display: none; }
-  .workspace-switch { grid-template-columns: 1fr; justify-items: center; }.main-nav { align-items: center; }.nav-item { width: 46px; justify-content: center; padding: 0; }.sidebar-user { grid-template-columns: 1fr; justify-items: center; }
+  .brand { justify-content: center; }.brand > div:not(.brand-mark), .nav-item span, .utility-nav button, .sidebar-user > div:nth-child(2), .sidebar-user > svg { display: none; }
+  .main-nav { align-items: center; }.nav-item { width: 46px; justify-content: center; padding: 0; }.sidebar-user { grid-template-columns: 1fr; justify-items: center; }
   .page, .topbar { padding-left: 22px; padding-right: 22px; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }.stat-item:nth-child(2) { border-right: 0; }.stat-item:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
   .dashboard-layout { grid-template-columns: 1fr; }.dashboard-bottom { grid-template-columns: 1fr; }
@@ -427,8 +432,8 @@ kbd { padding: 2px 6px; border: 1px solid #d2dbe3; border-radius: 4px; color: #7
   .app-shell { display: block; }
   .sidebar { position: fixed; left: 0; top: 0; width: 286px; max-width: 86vw; padding-inline: 14px; transform: translateX(-105%); transition: transform 180ms ease; box-shadow: 18px 0 40px rgba(0,0,0,.28); }
   .sidebar.is-open { transform: translateX(0); }
-  .sidebar.is-open .brand { justify-content: flex-start; }.sidebar.is-open .brand > div:not(.brand-mark), .sidebar.is-open .workspace-switch > div:nth-child(2), .sidebar.is-open .workspace-switch > svg, .sidebar.is-open .nav-item span, .sidebar.is-open .utility-nav button, .sidebar.is-open .sidebar-user > div:nth-child(2), .sidebar.is-open .sidebar-user > svg { display: block; }
-  .sidebar.is-open .workspace-switch { grid-template-columns: 34px 1fr; justify-items: initial; }.sidebar.is-open .main-nav { align-items: stretch; }.sidebar.is-open .nav-item { width: auto; justify-content: flex-start; padding: 0 11px; }.sidebar.is-open .utility-nav { display: flex; }.sidebar.is-open .utility-nav button { display: flex; }.sidebar.is-open .sidebar-user { grid-template-columns: 34px 1fr auto; justify-items: initial; }.sidebar-close { display: grid; }
+  .sidebar.is-open .brand { justify-content: flex-start; }.sidebar.is-open .brand > div:not(.brand-mark), .sidebar.is-open .nav-item span, .sidebar.is-open .utility-nav button, .sidebar.is-open .sidebar-user > div:nth-child(2), .sidebar.is-open .sidebar-user > svg { display: block; }
+  .sidebar.is-open .main-nav { align-items: stretch; }.sidebar.is-open .nav-item { width: auto; justify-content: flex-start; padding: 0 11px; }.sidebar.is-open .utility-nav { display: flex; }.sidebar.is-open .utility-nav button { display: flex; }.sidebar.is-open .sidebar-user { grid-template-columns: 34px 1fr auto; justify-items: initial; }.sidebar-close { display: grid; }
   .sidebar-scrim { position: fixed; inset: 0; z-index: 25; display: block; padding: 0; border: 0; background: rgba(5,10,15,.48); }
   .topbar { height: 56px; padding: 0 14px; }.menu-button { display: grid !important; }.global-search { width: min(260px, 66vw); }.global-search kbd { display: none; }.cluster-health { display: none; }
   .page { padding: 20px 14px 34px; }.page-header { min-height: 0; flex-direction: column; gap: 14px; margin-bottom: 19px; }.page-header h1 { font-size: 21px; }.page-actions { width: 100%; }.page-actions .button { flex: 1; min-width: 120px; }

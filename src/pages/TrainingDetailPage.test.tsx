@@ -21,7 +21,7 @@ const failedJob: TrainingJob = {
   createdAt: '2026-07-28T00:00:00.000Z',
   eta: '训练失败',
   errorMessage: 'Worker exited unexpectedly',
-  config: { type: 'detection', dataFormat: 'YOLO', name: '表面缺陷检测', datasetId: 'dataset-1', model: 'yolov8m', weightSource: 'pretrained', epochs: 100, batchSize: 8, learningRate: '0.001', imageSize: 640, gpu: 'CPU', mixedPrecision: false, earlyStopping: true },
+  config: { type: 'detection', dataFormat: 'YOLO', name: '表面缺陷检测', version: 'v2.1.0', datasetId: 'dataset-1', model: 'yolov8m', weightSource: 'pretrained', epochs: 100, batchSize: 8, learningRate: '0.001', imageSize: 640, gpu: 'CPU', mixedPrecision: false, earlyStopping: true },
 };
 
 vi.mock('../context/AppContext', () => ({

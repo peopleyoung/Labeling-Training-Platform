@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ApiClient, ApiClientError, apiEnabled } from '../services/apiClient';
-import type { AnnotationDocument, AnnotationImageAttributes, AnnotationRecord, AnnotationReviewDecisionInput, AnnotationReviewSummary, AuthUser, ConversionFormat, ConversionTask, Dataset, DatasetImage, ExportTask, ImageCaption, ModelVersion, RuntimeCapabilities, TrainingDraft, TrainingEvent, TrainingJob, TrainingObservability } from '../types';
+import type { AnnotationDocument, AnnotationImageAttributes, AnnotationRecord, AnnotationReviewDecisionInput, AnnotationReviewSummary, AuthUser, ConversionFormat, ConversionTask, Dataset, DatasetImage, ExportTask, ImageCaption, ModelVersion, ResourceDeletionResult, RuntimeCapabilities, TrainingDraft, TrainingEvent, TrainingJob, TrainingObservability, WorkspaceActivity } from '../types';
 
 interface ToastMessage { id: number; title: string; message: string; tone: 'success' | 'info' | 'error'; }
 interface Session { accessToken: string; user: AuthUser; }
@@ -11,6 +11,7 @@ interface AppContextValue {
   models: ModelVersion[];
   conversions: ConversionTask[];
   exports: ExportTask[];
+  activities: WorkspaceActivity[];
   toasts: ToastMessage[];
   session: Session | null;
   apiEnabled: boolean;
@@ -28,8 +29,10 @@ interface AppContextValue {
   trainingObservability: (jobId: string) => Promise<TrainingObservability>;
   createConversion: (input: { modelName: string; modelVersion: string; format: ConversionFormat; precision: string; target: string; options: Record<string, string | boolean> }) => Promise<string>;
   cancelConversion: (conversionId: string) => Promise<void>;
+  deleteConversion: (conversionId: string) => Promise<void>;
   uploadModel: (input: { name: string; version: string; task: ModelVersion['task']; framework: string; stage: ModelVersion['stage']; file: File }) => Promise<ModelVersion>;
   updateModelStage: (modelId: string, stage: ModelVersion['stage']) => Promise<void>;
+  deleteModel: (modelId: string) => Promise<void>;
   createDataset: (input: { name: string; description: string; version: string; classes: string[] }) => Promise<Dataset>;
   uploadDatasetImages: (datasetId: string, files: File[], split?: DatasetImage['split']) => Promise<DatasetImage[]>;
   datasetImages: (datasetId: string) => Promise<DatasetImage[]>;
@@ -52,6 +55,14 @@ const AppContext = createContext<AppContextValue | null>(null);
 const sessionStorageKey = 'forge-ai-session';
 const annotationKey = (datasetId: string, imageId: string) => `${datasetId}:${imageId}`;
 
+function releasedStorageMessage(result: ResourceDeletionResult) {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = result.releasedBytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return `已释放 ${unit === 0 ? value : value.toFixed(1)} ${units[unit]} 磁盘空间`;
+}
+
 function emptyAnnotationDocument(datasetId: string, imageId: string): AnnotationDocument {
   return { datasetId, imageId, revision: 0, annotations: [], captions: [], imageAttributes: { includeInSdxl: false, tags: [] }, updatedAt: new Date(0).toISOString(), updatedBy: '', reviewStatus: 'draft' };
 }
@@ -71,6 +82,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [models, setModels] = useState<ModelVersion[]>([]);
   const [conversions, setConversions] = useState<ConversionTask[]>([]);
   const [exports, setExports] = useState<ExportTask[]>([]);
+  const [activities, setActivities] = useState<WorkspaceActivity[]>([]);
   const [annotationDocuments, setAnnotationDocuments] = useState<Record<string, AnnotationDocument>>({});
   const annotationDocumentsRef = useRef(annotationDocuments);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -98,6 +110,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     window.localStorage.removeItem(sessionStorageKey);
+    setActivities([]);
     setSession(null);
   }, []);
 
@@ -125,11 +138,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!apiEnabled || !session) return;
-    Promise.all([client.datasets(), client.trainingJobs(), client.models(), client.conversions()]).then(([dataset, training, model, conversion]) => {
+    Promise.all([client.datasets(), client.trainingJobs(), client.models(), client.conversions(), client.activities()]).then(([dataset, training, model, conversion, activity]) => {
       setDatasets(dataset.items);
       setJobs(training.items);
       setModels(model.items);
       setConversions(conversion.items);
+      setActivities(activity.items);
     }).catch((error: unknown) => {
       if (error instanceof ApiClientError && error.code === 'UNAUTHORIZED') logout();
       else notify('数据同步失败', error instanceof Error ? error.message : '无法连接到平台服务', 'error');
@@ -139,10 +153,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!apiEnabled || !session) return;
     const refresh = () => {
-      void Promise.all([client.trainingJobs(), client.models(), client.conversions()]).then(([training, model, conversion]) => {
+      void Promise.all([client.trainingJobs(), client.models(), client.conversions(), client.activities()]).then(([training, model, conversion, activity]) => {
         setJobs(training.items);
         setModels(model.items);
         setConversions(conversion.items);
+        setActivities(activity.items);
       }).catch(() => undefined);
       const datasetIds = [...new Set(exports.map((task) => task.datasetId))];
       if (datasetIds.length) void Promise.all(datasetIds.map((datasetId) => client.datasetExports(datasetId))).then((results) => setExports(results.flatMap((result) => result.items))).catch(() => undefined);
@@ -190,10 +205,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const deleteTrainingJob = useCallback(async (jobId: string) => {
     if (!apiEnabled) throw new ApiClientError('API_DISABLED', '当前环境未连接平台服务');
-    await client.deleteTrainingJob(jobId);
+    const derivedModels = models.filter((model) => model.sourceJob === jobId);
+    const derivedModelKeys = new Set(derivedModels.map((model) => `${model.name}\u0000${model.version}`));
+    const result = await client.deleteTrainingJob(jobId);
     setJobs((current) => current.filter((item) => item.id !== jobId));
-    notify('训练任务已删除', '任务历史、日志、指标和资源采样已移除');
-  }, [client, notify]);
+    setModels((current) => current.filter((model) => model.sourceJob !== jobId));
+    setConversions((current) => current.filter((task) => !derivedModelKeys.has(`${task.modelName}\u0000${task.modelVersion}`)));
+    notify('训练任务及产物已删除', releasedStorageMessage(result));
+  }, [client, models, notify]);
 
   const trainingEvents = useCallback(async (jobId: string) => apiEnabled ? (await client.trainingEvents(jobId)).items : [], [client]);
   const trainingObservability = useCallback(async (jobId: string) => apiEnabled ? client.trainingObservability(jobId) : { metrics: [], resources: [] }, [client]);
@@ -235,9 +254,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const deleteDataset = useCallback(async (datasetId: string) => {
     if (!apiEnabled) throw new ApiClientError('API_DISABLED', '当前环境未连接平台服务');
-    await client.deleteDataset(datasetId);
+    const result = await client.deleteDataset(datasetId);
     setDatasets((current) => current.filter((item) => item.id !== datasetId));
-    notify('数据集已删除', '数据集元数据已移除');
+    setExports((current) => current.filter((item) => item.datasetId !== datasetId));
+    notify('数据集及产物已删除', releasedStorageMessage(result));
   }, [client, notify]);
 
   const createDatasetExport = useCallback(async (datasetId: string, input: { format: ExportTask['format']; scope: NonNullable<ExportTask['scope']>; versionName: string; includeImages: boolean }) => {
@@ -345,6 +365,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     notify('转换任务已取消', `${task.modelName} ${task.format} 已停止`);
   }, [client, notify]);
 
+  const deleteConversion = useCallback(async (conversionId: string) => {
+    if (!apiEnabled) throw new ApiClientError('API_DISABLED', '当前环境未连接平台服务');
+    const result = await client.deleteConversion(conversionId);
+    setConversions((current) => current.filter((task) => task.id !== conversionId));
+    notify('转换任务及产物已删除', releasedStorageMessage(result));
+  }, [client, notify]);
+
   const uploadModel = useCallback(async (input: { name: string; version: string; task: ModelVersion['task']; framework: string; stage: ModelVersion['stage']; file: File }) => {
     if (!apiEnabled) throw new ApiClientError('API_DISABLED', '当前环境未连接平台服务');
     const model = await client.uploadModel(input);
@@ -360,7 +387,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     notify('模型阶段已更新', `${model.name} 已设为${stage}`);
   }, [client, notify]);
 
-  const value = useMemo(() => ({ datasets, jobs, models, conversions, exports, toasts, session, apiEnabled, gpuEnabled, cpuTrainingEnabled, cpuOnnxEnabled, cpuConversionFormats, login, logout, createTrainingJob, retryTrainingJob, cancelTrainingJob, deleteTrainingJob, trainingEvents, trainingObservability, createConversion, cancelConversion, uploadModel, updateModelStage, createDataset, uploadDatasetImages, datasetImages, datasetImagePreview, updateDatasetClasses, deleteDataset, createDatasetExport, loadDatasetExports, downloadArtifact, loadAnnotationDocument, saveAnnotationDocument, loadAnnotationReview, submitAnnotationReview, decideAnnotationReview, notify, dismissToast }), [datasets, jobs, models, conversions, exports, toasts, session, gpuEnabled, cpuTrainingEnabled, cpuOnnxEnabled, cpuConversionFormats, login, logout, createTrainingJob, retryTrainingJob, cancelTrainingJob, deleteTrainingJob, trainingEvents, trainingObservability, createConversion, cancelConversion, uploadModel, updateModelStage, createDataset, uploadDatasetImages, datasetImages, datasetImagePreview, updateDatasetClasses, deleteDataset, createDatasetExport, loadDatasetExports, downloadArtifact, loadAnnotationDocument, saveAnnotationDocument, loadAnnotationReview, submitAnnotationReview, decideAnnotationReview, notify, dismissToast]);
+  const deleteModel = useCallback(async (modelId: string) => {
+    if (!apiEnabled) throw new ApiClientError('API_DISABLED', '当前环境未连接平台服务');
+    const deletedModel = models.find((model) => model.id === modelId);
+    const result = await client.deleteModel(modelId);
+    setModels((current) => current.filter((item) => item.id !== modelId));
+    if (deletedModel) setConversions((current) => current.filter((task) => task.modelName !== deletedModel.name || task.modelVersion !== deletedModel.version));
+    notify('模型及转换产物已删除', releasedStorageMessage(result));
+  }, [client, models, notify]);
+
+  const value = useMemo(() => ({ datasets, jobs, models, conversions, exports, activities, toasts, session, apiEnabled, gpuEnabled, cpuTrainingEnabled, cpuOnnxEnabled, cpuConversionFormats, login, logout, createTrainingJob, retryTrainingJob, cancelTrainingJob, deleteTrainingJob, trainingEvents, trainingObservability, createConversion, cancelConversion, deleteConversion, uploadModel, updateModelStage, deleteModel, createDataset, uploadDatasetImages, datasetImages, datasetImagePreview, updateDatasetClasses, deleteDataset, createDatasetExport, loadDatasetExports, downloadArtifact, loadAnnotationDocument, saveAnnotationDocument, loadAnnotationReview, submitAnnotationReview, decideAnnotationReview, notify, dismissToast }), [datasets, jobs, models, conversions, exports, activities, toasts, session, gpuEnabled, cpuTrainingEnabled, cpuOnnxEnabled, cpuConversionFormats, login, logout, createTrainingJob, retryTrainingJob, cancelTrainingJob, deleteTrainingJob, trainingEvents, trainingObservability, createConversion, cancelConversion, deleteConversion, uploadModel, updateModelStage, deleteModel, createDataset, uploadDatasetImages, datasetImages, datasetImagePreview, updateDatasetClasses, deleteDataset, createDatasetExport, loadDatasetExports, downloadArtifact, loadAnnotationDocument, saveAnnotationDocument, loadAnnotationReview, submitAnnotationReview, decideAnnotationReview, notify, dismissToast]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ArrowRight, Database, Download, FileArchive, FileJson, FileStack, Plus, ShieldCheck, Tags, Trash2, Upload } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { EmptyState, Modal, PageHeader, ProgressBar } from '../components/ui';
+import { EmptyState, Modal, PageHeader, Pagination, ProgressBar } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { dataFormatDescriptions, taskLabels } from '../data/catalog';
 import type { DataFormat, ExportTask, TrainingType } from '../types';
@@ -26,6 +26,8 @@ export function DatasetsPage() {
   const [datasetFiles, setDatasetFiles] = useState<File[]>([]);
   const [submittingDataset, setSubmittingDataset] = useState(false);
   const [filter, setFilter] = useState<DatasetFilter>('all');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [exportDatasetId, setExportDatasetId] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>('COCO');
   const [exportScope, setExportScope] = useState<NonNullable<ExportTask['scope']>>('all');
@@ -39,7 +41,9 @@ export function DatasetsPage() {
   const annotatingCount = datasets.filter((dataset) => dataset.status === '标注中').length;
   const reviewCount = datasets.filter((dataset) => dataset.status === '待审核').length;
   const readyCount = datasets.filter((dataset) => dataset.status === '可训练').length;
-  const visibleDatasets = useMemo(() => filter === 'all' ? datasets : datasets.filter((dataset) => dataset.status === filter), [datasets, filter]);
+  const filteredDatasets = useMemo(() => filter === 'all' ? datasets : datasets.filter((dataset) => dataset.status === filter), [datasets, filter]);
+  const currentPage = Math.min(page, Math.max(1, Math.ceil(filteredDatasets.length / pageSize)));
+  const visibleDatasets = useMemo(() => filteredDatasets.slice((currentPage - 1) * pageSize, currentPage * pageSize), [currentPage, filteredDatasets, pageSize]);
   const visibleExports = exports.filter((task) => task.datasetId === exportDatasetId);
   const canReview = session?.user.role === 'admin' || session?.user.role === 'engineer';
 
@@ -103,7 +107,7 @@ export function DatasetsPage() {
   };
 
   const removeDataset = async (datasetId: string, name: string) => {
-    if (!window.confirm(`确定删除数据集“${name}”吗？该操作会删除其标注记录。`)) return;
+    if (!window.confirm(`确定删除数据集“${name}”吗？原始图像、标注记录和全部导出产物都将从本地存储永久删除。`)) return;
     try { await deleteDataset(datasetId); } catch (error) { notify('数据集未删除', error instanceof Error ? error.message : '服务暂时不可用，请稍后重试', 'error'); }
   };
 
@@ -149,10 +153,10 @@ export function DatasetsPage() {
 
       <section className="data-toolbar">
         <div className="segmented tabs" aria-label="数据状态">
-          <button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>全部数据集 <span>{datasets.length}</span></button>
-          <button className={filter === '标注中' ? 'active' : ''} onClick={() => setFilter('标注中')}>标注中 <span>{annotatingCount}</span></button>
-          <button className={filter === '待审核' ? 'active' : ''} onClick={() => setFilter('待审核')}>待审核 <span>{reviewCount}</span></button>
-          <button className={filter === '可训练' ? 'active' : ''} onClick={() => setFilter('可训练')}>可训练 <span>{readyCount}</span></button>
+          <button className={filter === 'all' ? 'active' : ''} onClick={() => { setFilter('all'); setPage(1); }}>全部数据集 <span>{datasets.length}</span></button>
+          <button className={filter === '标注中' ? 'active' : ''} onClick={() => { setFilter('标注中'); setPage(1); }}>标注中 <span>{annotatingCount}</span></button>
+          <button className={filter === '待审核' ? 'active' : ''} onClick={() => { setFilter('待审核'); setPage(1); }}>待审核 <span>{reviewCount}</span></button>
+          <button className={filter === '可训练' ? 'active' : ''} onClick={() => { setFilter('可训练'); setPage(1); }}>可训练 <span>{readyCount}</span></button>
         </div>
         <div className="toolbar-meta"><span>按最近更新</span></div>
       </section>
@@ -191,6 +195,7 @@ export function DatasetsPage() {
             </tbody>
           </table>
         </div>
+        {filteredDatasets.length > 0 && <Pagination page={currentPage} pageSize={pageSize} totalItems={filteredDatasets.length} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} />}
         {visibleDatasets.length === 0 && <EmptyState icon={Database} title={datasets.length ? '没有匹配的数据集' : '暂无数据集'} description={datasets.length ? '调整状态筛选后重试' : '导入图像与标注，或创建一个空数据集开始整理数据'} />}
       </section>
 

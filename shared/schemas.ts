@@ -12,6 +12,7 @@ export const trainingDraftSchema = z.object({
   type: z.enum(trainingTypes),
   dataFormat: z.enum(dataFormats),
   name: z.string().trim().min(2).max(120),
+  version: z.string().trim().min(1).max(40).default('v1'),
   datasetId: z.string().trim().min(1).max(80),
   model: z.string().trim().min(2).max(80),
   weightSource: z.enum(['pretrained', 'scratch']).default('pretrained'),

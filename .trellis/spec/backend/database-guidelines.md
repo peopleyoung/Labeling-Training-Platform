@@ -83,11 +83,11 @@ await pool.query(
 ### 1. Scope / Trigger
 
 - Trigger: deleting a training task from the list or detail page.
-- Reason: task state exists in PostgreSQL and BullMQ, while completed model artifacts have an independent lifecycle. Deleting only one side can start an orphan Worker or destroy a reusable model.
+- Reason: task state exists in PostgreSQL and BullMQ, while its model and conversion bytes exist in shared storage. Deleting only one side can start an orphan Worker or leave unbounded disk usage.
 
 ### 2. Signatures
 
-- `DELETE /api/v1/training/jobs/:jobId -> 204 No Content`
+- `DELETE /api/v1/training/jobs/:jobId -> 200 ResourceDeletionResult`
 - `TaskQueue.remove('training', jobId, 'cpu' | 'gpu') -> Promise<void>`
 - `Repository.deleteTrainingJob(jobId) -> Promise<boolean>`
 - `training_events`, `training_metrics`, and `training_resource_samples` reference `training_jobs(id) ON DELETE CASCADE`.
@@ -103,28 +103,30 @@ await pool.query(
 - Remove the retained BullMQ job from the queue matching the persisted execution target before deleting the PostgreSQL row.
 - Deletion of a cancelled job waits for a bounded Worker shutdown window before returning `TRAINING_DELETE_PENDING`; users should not need to manually retry during normal process teardown.
 - Worker failure updates must use `WHERE status IN ('queued', 'running')`. A late process exit must never overwrite `cancelled` with `failed` or append a misleading error event.
-- Deleting the task cascades its events, metrics, and resource samples.
-- Preserve `model_versions`, `artifacts`, and artifact bytes. Their lineage retains the historical source job id even after the operational task row is removed.
-- Write a `training.delete` audit record with the deleted id, name, terminal status, and whether an artifact was preserved.
+- Deleting the task cascades its events, metrics, resource samples, derived `model_versions`, their conversion jobs, artifact metadata, and managed bytes below `training/<jobId>`, `runtime/training/<jobId>`, and `conversions/<conversionId>`.
+- Remove queued or retained conversion jobs from both CPU and GPU queues before deleting their rows. An active conversion must finish or stop before the parent resource can be deleted.
+- The API returns released bytes/files/directories and derived-record counts, and writes the same values to `training.delete` audit metadata.
+- Dataset deletion removes `datasets/<datasetId>` and every `exports/<exportId>` directory. Model deletion removes its original artifact and every derived conversion directory.
+- Never delete `/data/model-cache` from a business-resource delete or artifact garbage collection. Pretrained weights are deployment-managed cache, not user task output.
 
 ### 4. Validation & Error Matrix
 
 - Unknown job -> `404 TRAINING_JOB_NOT_FOUND`.
 - Queued or running job -> `409 TRAINING_DELETE_NOT_ALLOWED`.
-- Cancelled row whose BullMQ job leaves `active` within the shutdown window -> remove the queue record and return `204` in the same request.
+- Cancelled row whose BullMQ job leaves `active` within the shutdown window -> remove the queue record and return `200` with deletion metrics in the same request.
 - Cancelled row whose BullMQ job remains active beyond the bounded shutdown window -> `409 TRAINING_DELETE_PENDING`.
 - Annotator request -> `403 FORBIDDEN`.
 - Redis/storage failure other than an active job -> propagate as an operational failure; do not delete the PostgreSQL row.
 
 ### 5. Good/Base/Bad Cases
 
-- Good: failed CPU job -> remove `training-<id>` from `forge-cpu`, delete the job row, cascade telemetry, preserve its registered model/artifact, then return 204.
+- Good: failed CPU job -> remove `training-<id>` from `forge-cpu`, delete the job row, cascade telemetry, models and conversions, remove managed directories, then return released-space metrics.
 - Base: completed job has already aged out of BullMQ -> queue removal is a no-op and PostgreSQL deletion succeeds.
-- Bad: delete a running row and let the Worker later write events to a missing foreign key, or cascade-delete the trained model when the user only selected task history.
+- Bad: delete a running row and let the Worker later write events to a missing foreign key, or delete only PostgreSQL rows while leaving weights on disk.
 
 ### 6. Tests Required
 
-- API integration tests assert role protection, active-state conflict, terminal deletion, repeat-delete 404, and queue cleanup.
+- API integration tests assert role protection, active-state conflict, terminal deletion, repeat-delete 404, queue cleanup, dependent-model/conversion deletion, and physical directory removal.
 - Cancellation regression coverage must include both queued removal and `running -> cancelled -> immediate DELETE`, proving the delete path waits for Worker lock release.
 - Deployment smoke coverage must confirm the Python runner and its framework subprocess are both gone after cancellation; database-only assertions are insufficient.
 - Repository/memory tests assert events and observability records disappear with the job.
@@ -147,7 +149,9 @@ if (job.status === 'queued' || job.status === 'running') {
   throw new HttpError(409, 'TRAINING_DELETE_NOT_ALLOWED', 'Stop the job first');
 }
 await queue.remove('training', job.id, job.gpu === 'CPU' ? 'cpu' : 'gpu');
+await removeConversionQueueTasks(plan.conversions);
 await repository.deleteTrainingJob(job.id);
+await removeManagedArtifactDirectories(artifactRoot, managedDirectories);
 ```
 
 Worker failure handling must preserve the terminal cancellation decision:
@@ -158,6 +162,63 @@ await pool.query(
   "WHERE id = $1 AND status IN ('queued', 'running')",
   [taskId, message],
 );
+```
+
+## Scenario: Terminal Conversion Task Deletion
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing deletion from the conversion task list.
+- Reason: a conversion exists in PostgreSQL, BullMQ and managed artifact storage; all three copies must be removed together to prevent retained jobs and leaked deployment files.
+
+### 2. Signatures
+
+- `DELETE /api/v1/conversions/:conversionId -> 200 ResourceDeletionResult`
+- `Repository.deleteConversion(conversionId) -> Promise<boolean>`
+- `TaskQueue.remove('conversion', conversionId, 'cpu' | 'gpu', { waitForActiveMs: 10_000 })`
+
+### 3. Contracts
+
+- Only `admin` and `engineer` roles may delete conversion tasks.
+- Only `completed`, `failed` and `cancelled` tasks are deletable; queued or running tasks must be cancelled first.
+- Remove retained queue records from both CPU and GPU queues before deleting the database row because the historical task does not persist a dedicated execution-target column.
+- Repository deletion removes the `conversion_jobs` row and every `artifacts` row whose source is the conversion task in one transaction.
+- Storage cleanup is restricted to `conversions/<conversionId>`. The response and `conversion.delete` audit record include released bytes/files/directories and `removedConversions: 1`.
+
+### 4. Validation & Error Matrix
+
+- Unknown task -> `404 CONVERSION_NOT_FOUND`.
+- Queued or running task -> `409 CONVERSION_DELETE_NOT_ALLOWED`.
+- Cancelled task whose Worker remains active beyond the bounded wait -> `409 RESOURCE_DELETE_PENDING`.
+- Annotator request -> `403 FORBIDDEN`.
+- Queue or storage operational failure -> propagate the failure; never report a successful deletion while a Worker can still publish output.
+
+### 5. Good/Base/Bad Cases
+
+- Good: completed ONNX task -> remove CPU/GPU queue records, transactionally delete task/artifact metadata, remove its directory, and return released storage.
+- Base: failed task has no artifact directory -> deletion succeeds with zero released bytes.
+- Bad: remove the React row only, or delete PostgreSQL before checking the active BullMQ lock.
+
+### 6. Tests Required
+
+- API integration asserts active-state conflict, role protection, terminal deletion, repeat-delete 404, both queue targets removed, and physical directory removal.
+- Component tests assert 10/20/50 pagination, terminal-row confirmation, and no delete button on a running row.
+- Deployment browser smoke confirms the deleted task disappears and the API remains healthy.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+setConversions((tasks) => tasks.filter((task) => task.id !== conversionId));
+```
+
+#### Correct
+
+```ts
+await removeConversionQueueTasks([task]);
+await repository.deleteConversion(task.id);
+await removeManagedArtifactDirectories(artifactRoot, [`conversions/${task.id}`]);
 ```
 
 ## Scenario: Optimistic Annotation Revisions

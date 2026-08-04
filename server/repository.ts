@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { Pool, type PoolClient } from 'pg';
-import type { AnnotationReviewDecisionInput, AnnotationReviewItem, AnnotationReviewSummary, Artifact, AuthUser, AnnotationDocument, ConversionTask, Dataset, DatasetImage, ExportTask, ModelVersion, TrainingDraft, TrainingEvent, TrainingJob, TrainingObservability, TrainingMetricPoint, TrainingResourceSample, UserRole } from '../shared/contracts';
+import type { AnnotationReviewDecisionInput, AnnotationReviewItem, AnnotationReviewSummary, Artifact, AuthUser, AnnotationDocument, ConversionTask, Dataset, DatasetImage, ExportTask, ModelVersion, TrainingDraft, TrainingEvent, TrainingJob, TrainingObservability, TrainingMetricPoint, TrainingResourceSample, UserRole, WorkspaceActivity } from '../shared/contracts';
 import { RepositoryConflictError, RepositoryStateError } from './errors';
 import { workspaceId } from './workspace';
 
@@ -17,6 +17,22 @@ export interface MemoryRepositoryFixtures {
   conversions?: ConversionTask[];
 }
 
+export interface DatasetDeletionPlan {
+  dataset: Dataset;
+  exports: ExportTask[];
+}
+
+export interface TrainingDeletionPlan {
+  job: TrainingJob;
+  models: ModelVersion[];
+  conversions: ConversionTask[];
+}
+
+export interface ModelDeletionPlan {
+  model: ModelVersion;
+  conversions: ConversionTask[];
+}
+
 export interface Repository {
   close(): Promise<void>;
   findUserByUsername(username: string): Promise<StoredUser | null>;
@@ -25,6 +41,7 @@ export interface Repository {
   getDataset(id: string): Promise<Dataset | null>;
   createDataset(input: { name: string; description: string; version: string; classes: string[] }): Promise<Dataset>;
   updateDatasetClasses(id: string, classes: string[]): Promise<Dataset | null>;
+  getDatasetDeletionPlan(id: string): Promise<DatasetDeletionPlan | null>;
   deleteDataset(id: string): Promise<boolean>;
   listDatasetArtifacts(datasetId: string): Promise<Artifact[]>;
   listDatasetImages(datasetId: string): Promise<DatasetImage[]>;
@@ -41,20 +58,25 @@ export interface Repository {
   getTrainingObservability(jobId: string): Promise<TrainingObservability>;
   createTrainingJob(input: { draft: TrainingDraft; datasetName: string; createdBy: string; retrySourceId?: string }): Promise<TrainingJob>;
   cancelTrainingJob(id: string): Promise<TrainingJob | null>;
+  getTrainingDeletionPlan(id: string): Promise<TrainingDeletionPlan | null>;
   deleteTrainingJob(id: string): Promise<boolean>;
   listModels(): Promise<ModelVersion[]>;
   getModel(id: string): Promise<ModelVersion | null>;
   getModelByNameVersion(name: string, version: string): Promise<ModelVersion | null>;
   createUploadedModel(input: { id: string; artifactId: string; name: string; version: string; task: ModelVersion['task']; framework: string; stage: ModelVersion['stage']; objectKey: string; filename: string; mimeType: string; sizeBytes: number; sha256: string; createdBy: string }): Promise<ModelVersion>;
   updateModelStage(id: string, stage: ModelVersion['stage']): Promise<ModelVersion | null>;
+  getModelDeletionPlan(id: string): Promise<ModelDeletionPlan | null>;
+  deleteModel(id: string): Promise<boolean>;
   listConversions(): Promise<ConversionTask[]>;
   getConversion(id: string): Promise<ConversionTask | null>;
   createConversion(input: { modelName: string; modelVersion: string; format: ConversionTask['format']; precision: string; target: string; options: Record<string, string | boolean>; createdBy: string }): Promise<ConversionTask>;
   cancelConversion(id: string): Promise<ConversionTask | null>;
+  deleteConversion(id: string): Promise<boolean>;
   createExport(input: { datasetId: string; format: ExportTask['format']; scope: NonNullable<ExportTask['scope']>; versionName: string; includeImages: boolean; createdBy: string }): Promise<ExportTask>;
   listExports(datasetId: string): Promise<ExportTask[]>;
   getExport(id: string): Promise<ExportTask | null>;
   getArtifact(id: string): Promise<Artifact | null>;
+  listRecentActivities(limit: number): Promise<WorkspaceActivity[]>;
   writeAudit(input: { actorId: string; action: string; entityType: string; entityId?: string; metadata?: Record<string, unknown> }): Promise<void>;
 }
 
@@ -107,6 +129,7 @@ export class MemoryRepository implements Repository {
   private readonly trainingEvents: TrainingEvent[] = [];
   private readonly trainingMetrics: TrainingMetricPoint[] = [];
   private readonly trainingResources: TrainingResourceSample[] = [];
+  private readonly auditLogs: WorkspaceActivity[] = [];
 
   constructor(fixtures: MemoryRepositoryFixtures = {}) {
     this.users = (fixtures.users ?? []).map((user) => ({ ...user, passwordHash: bcrypt.hashSync(user.password, 10) }));
@@ -133,6 +156,11 @@ export class MemoryRepository implements Repository {
     dataset.classes = [...new Set(classes)];
     dataset.updatedAt = new Date().toISOString();
     return structuredClone(dataset);
+  }
+  async getDatasetDeletionPlan(id: string) {
+    const dataset = this.datasets.find((item) => item.id === id);
+    if (!dataset) return null;
+    return structuredClone({ dataset, exports: this.exports.filter((task) => task.datasetId === id) });
   }
   async deleteDataset(id: string) {
     const index = this.datasets.findIndex((item) => item.id === id);
@@ -271,14 +299,34 @@ export class MemoryRepository implements Repository {
   async getTrainingObservability(jobId: string) { return structuredClone({ metrics: this.trainingMetrics.filter((point) => point.jobId === jobId), resources: this.trainingResources.filter((sample) => sample.jobId === jobId) }); }
   async createTrainingJob(input: { draft: TrainingDraft; datasetName: string; createdBy: string; retrySourceId?: string }) { const job = { ...newTrainingJob(input), config: structuredClone(input.draft) }; this.jobs.unshift(job); this.trainingEvents.push({ id: String(this.trainingEvents.length + 1), jobId: job.id, level: 'info', message: input.retrySourceId ? `由失败任务 ${input.retrySourceId} 重新创建并进入资源队列` : '训练任务已创建并进入资源队列', createdAt: new Date().toISOString() }); return structuredClone(job); }
   async cancelTrainingJob(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job || !['queued', 'running'].includes(job.status)) return job ? structuredClone(job) : null; job.status = 'cancelled'; job.eta = '已取消'; this.trainingEvents.push({ id: String(this.trainingEvents.length + 1), jobId: id, level: 'warning', message: '训练任务已由用户取消', createdAt: new Date().toISOString() }); return structuredClone(job); }
+  async getTrainingDeletionPlan(id: string) {
+    const job = this.jobs.find((item) => item.id === id);
+    if (!job) return null;
+    const models = this.models.filter((model) => model.sourceJob === id);
+    const identities = new Set(models.map((model) => `${model.name}\u0000${model.version}`));
+    const conversions = this.conversions.filter((task) => identities.has(`${task.modelName}\u0000${task.modelVersion}`));
+    return structuredClone({ job, models, conversions });
+  }
   async deleteTrainingJob(id: string) {
     const index = this.jobs.findIndex((job) => job.id === id);
     if (index < 0) return false;
+    const models = this.models.filter((model) => model.sourceJob === id);
+    const identities = new Set(models.map((model) => `${model.name}\u0000${model.version}`));
+    const conversionIds = this.conversions.filter((task) => identities.has(`${task.modelName}\u0000${task.modelVersion}`)).map((task) => task.id);
+    for (let conversionIndex = this.conversions.length - 1; conversionIndex >= 0; conversionIndex -= 1) {
+      if (conversionIds.includes(this.conversions[conversionIndex].id)) this.conversions.splice(conversionIndex, 1);
+    }
+    for (let modelIndex = this.models.length - 1; modelIndex >= 0; modelIndex -= 1) {
+      if (this.models[modelIndex].sourceJob === id) this.models.splice(modelIndex, 1);
+    }
     this.jobs.splice(index, 1);
     for (const records of [this.trainingEvents, this.trainingMetrics, this.trainingResources]) {
       for (let recordIndex = records.length - 1; recordIndex >= 0; recordIndex -= 1) {
         if (records[recordIndex].jobId === id) records.splice(recordIndex, 1);
       }
+    }
+    for (const [artifactId, artifact] of this.artifacts) {
+      if ((artifact.sourceType === 'training_job' && artifact.sourceId === id) || (artifact.sourceType === 'conversion_job' && conversionIds.includes(artifact.sourceId))) this.artifacts.delete(artifactId);
     }
     return true;
   }
@@ -292,15 +340,59 @@ export class MemoryRepository implements Repository {
     return structuredClone(model);
   }
   async updateModelStage(id: string, stage: ModelVersion['stage']) { const model = this.models.find((item) => item.id === id); if (!model) return null; model.stage = stage; return structuredClone(model); }
+  async getModelDeletionPlan(id: string) {
+    const model = this.models.find((item) => item.id === id);
+    if (!model) return null;
+    const conversions = this.conversions.filter((task) => task.modelName === model.name && task.modelVersion === model.version);
+    return structuredClone({ model, conversions });
+  }
+  async deleteModel(id: string) {
+    const index = this.models.findIndex((model) => model.id === id);
+    if (index < 0) return false;
+    const model = this.models[index];
+    const conversionIds = this.conversions.filter((task) => task.modelName === model.name && task.modelVersion === model.version).map((task) => task.id);
+    for (let conversionIndex = this.conversions.length - 1; conversionIndex >= 0; conversionIndex -= 1) {
+      if (conversionIds.includes(this.conversions[conversionIndex].id)) this.conversions.splice(conversionIndex, 1);
+    }
+    this.models.splice(index, 1);
+    for (const [artifactId, artifact] of this.artifacts) {
+      if ((artifact.sourceType === 'model_upload' && artifact.sourceId === id) || (artifact.sourceType === 'conversion_job' && conversionIds.includes(artifact.sourceId)) || artifactId === model.artifactId) this.artifacts.delete(artifactId);
+    }
+    const sourceJob = this.jobs.find((job) => job.id === model.sourceJob);
+    if (sourceJob && sourceJob.artifactId === model.artifactId) delete sourceJob.artifactId;
+    return true;
+  }
   async listConversions() { return structuredClone(this.conversions); }
   async getConversion(id: string) { return structuredClone(this.conversions.find((item) => item.id === id) ?? null); }
   async createConversion(input: { modelName: string; modelVersion: string; format: ConversionTask['format']; precision: string; target: string; options: Record<string, string | boolean>; createdBy: string }) { const task: ConversionTask = { id: `convert-${randomUUID()}`, ...input, status: 'queued', progress: 0, size: '计算中', createdAt: new Date().toISOString() }; this.conversions.unshift(task); return structuredClone(task); }
   async cancelConversion(id: string) { const task = this.conversions.find((item) => item.id === id); if (!task || !['queued', 'running'].includes(task.status)) return task ? structuredClone(task) : null; task.status = 'cancelled'; return structuredClone(task); }
+  async deleteConversion(id: string) {
+    const index = this.conversions.findIndex((task) => task.id === id);
+    if (index < 0) return false;
+    const task = this.conversions[index];
+    this.conversions.splice(index, 1);
+    for (const [artifactId, artifact] of this.artifacts) {
+      if ((artifact.sourceType === 'conversion_job' && artifact.sourceId === id) || artifactId === task.artifactId) this.artifacts.delete(artifactId);
+    }
+    return true;
+  }
   async createExport(input: { datasetId: string; format: ExportTask['format']; scope: NonNullable<ExportTask['scope']>; versionName: string; includeImages: boolean; createdBy: string }) { const task: ExportTask = { id: `export-${randomUUID()}`, ...input, status: 'queued', progress: 0, createdAt: new Date().toISOString() }; this.exports.unshift(task); return structuredClone(task); }
   async listExports(datasetId: string) { return structuredClone(this.exports.filter((task) => task.datasetId === datasetId)); }
   async getExport(id: string) { return structuredClone(this.exports.find((task) => task.id === id) ?? null); }
   async getArtifact(id: string): Promise<Artifact | null> { return structuredClone(this.artifacts.get(id) ?? null); }
-  async writeAudit() {}
+  async listRecentActivities(limit: number) { return structuredClone(this.auditLogs.filter((activity) => activity.action !== 'auth.login').slice(0, limit)); }
+  async writeAudit(input: { actorId: string; action: string; entityType: string; entityId?: string; metadata?: Record<string, unknown> }) {
+    const actor = this.users.find((user) => user.id === input.actorId);
+    this.auditLogs.unshift({
+      id: `audit-${randomUUID()}`,
+      action: input.action,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      metadata: structuredClone(input.metadata ?? {}),
+      actor: actor ? { id: actor.id, displayName: actor.displayName } : null,
+      createdAt: new Date().toISOString(),
+    });
+  }
 }
 
 function mapUser(row: Record<string, unknown>): StoredUser {
@@ -406,6 +498,18 @@ function mapTrainingEvent(row: Record<string, unknown>): TrainingEvent {
   return { id: String(row.id), jobId: String(row.job_id), level: row.level as TrainingEvent['level'], message: String(row.message), createdAt: displayDate(row.created_at as string | Date) };
 }
 
+function mapWorkspaceActivity(row: Record<string, unknown>): WorkspaceActivity {
+  return {
+    id: String(row.id),
+    action: String(row.action),
+    entityType: String(row.entity_type),
+    entityId: row.entity_id ? String(row.entity_id) : undefined,
+    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {},
+    actor: row.actor_id ? { id: String(row.actor_id), displayName: String(row.actor_name ?? row.actor_id) } : null,
+    createdAt: displayDate(row.created_at as string | Date),
+  };
+}
+
 function mapTrainingMetric(row: Record<string, unknown>): TrainingMetricPoint {
   return { id: String(row.id), jobId: String(row.job_id), epoch: Number(row.epoch), progress: Number(row.progress), metrics: (row.metrics as Record<string, number>) ?? {}, createdAt: displayDate(row.created_at as string | Date) };
 }
@@ -483,6 +587,11 @@ export class PgRepository implements Repository {
   async updateDatasetClasses(id: string, classes: string[]) {
     const row = await this.one('UPDATE datasets SET classes = $2, updated_at = NOW() WHERE id = $1 RETURNING *', [id, JSON.stringify([...new Set(classes)])]);
     return row ? mapDataset(row) : null;
+  }
+  async getDatasetDeletionPlan(id: string) {
+    const dataset = await this.getDataset(id);
+    if (!dataset) return null;
+    return { dataset, exports: await this.listExports(id) };
   }
   async deleteDataset(id: string) {
     const client = await this.pool.connect();
@@ -656,7 +765,42 @@ export class PgRepository implements Repository {
   }
   async createTrainingJob(input: { draft: TrainingDraft; datasetName: string; createdBy: string; retrySourceId?: string }) { const job = newTrainingJob(input); const row = await this.one('INSERT INTO training_jobs(id, workspace_id, name, type, model, dataset, status, progress, epoch, metric_name, metric_value, gpu, eta, created_by, config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *', [job.id, workspaceId, job.name, job.type, job.model, job.dataset, job.status, job.progress, job.epoch, job.metricName, job.metricValue, job.gpu, job.eta, input.createdBy, JSON.stringify(input.draft)]); if (!row) throw new Error('Failed to create training job'); const message = input.retrySourceId ? `由失败任务 ${input.retrySourceId} 重新创建并进入资源队列` : '训练任务已创建并进入资源队列'; await this.pool.query('INSERT INTO training_events(workspace_id, job_id, level, message) VALUES ($1,$2,$3,$4)', [workspaceId, job.id, 'info', message]); return mapJob(row); }
   async cancelTrainingJob(id: string) { const row = await this.one('UPDATE training_jobs SET status = \'cancelled\', eta = \'已取消\', updated_at = NOW() WHERE id = $1 AND status IN (\'queued\', \'running\') RETURNING *', [id]); if (row) { await this.pool.query('INSERT INTO training_events(workspace_id, job_id, level, message) VALUES ($1,$2,$3,$4)', [row.workspace_id, id, 'warning', '训练任务已由用户取消']); return mapJob(row); } return this.getTrainingJob(id); }
-  async deleteTrainingJob(id: string) { const result = await this.pool.query('DELETE FROM training_jobs WHERE id = $1', [id]); return (result.rowCount ?? 0) > 0; }
+  async getTrainingDeletionPlan(id: string) {
+    const job = await this.getTrainingJob(id);
+    if (!job) return null;
+    const [models, conversions] = await Promise.all([
+      this.pool.query('SELECT * FROM model_versions WHERE source_job = $1 ORDER BY created_at', [id]),
+      this.pool.query('SELECT c.* FROM conversion_jobs c JOIN model_versions m ON m.workspace_id = c.workspace_id AND m.name = c.model_name AND m.version = c.model_version WHERE m.source_job = $1 ORDER BY c.created_at', [id]),
+    ]);
+    return { job, models: models.rows.map(mapModel), conversions: conversions.rows.map(mapConversion) };
+  }
+  async deleteTrainingJob(id: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const models = await client.query<{ id: string; artifact_id: string | null }>('SELECT id, artifact_id FROM model_versions WHERE source_job = $1 FOR UPDATE', [id]);
+      const conversions = await client.query<{ id: string; artifact_id: string | null }>('SELECT c.id, c.artifact_id FROM conversion_jobs c JOIN model_versions m ON m.workspace_id = c.workspace_id AND m.name = c.model_name AND m.version = c.model_version WHERE m.source_job = $1 FOR UPDATE OF c', [id]);
+      const artifactIds = [
+        ...(await client.query<{ artifact_id: string | null }>('SELECT artifact_id FROM training_jobs WHERE id = $1 FOR UPDATE', [id])).rows.map((row) => row.artifact_id),
+        ...models.rows.map((row) => row.artifact_id),
+        ...conversions.rows.map((row) => row.artifact_id),
+      ].filter((artifactId): artifactId is string => Boolean(artifactId));
+      const conversionIds = conversions.rows.map((row) => row.id);
+      if (conversionIds.length) await client.query('DELETE FROM conversion_jobs WHERE id = ANY($1::text[])', [conversionIds]);
+      await client.query('DELETE FROM model_versions WHERE source_job = $1', [id]);
+      const result = await client.query('DELETE FROM training_jobs WHERE id = $1', [id]);
+      if (conversionIds.length) await client.query("DELETE FROM artifacts WHERE source_type = 'conversion_job' AND source_id = ANY($1::text[])", [conversionIds]);
+      await client.query("DELETE FROM artifacts WHERE source_type = 'training_job' AND source_id = $1", [id]);
+      if (artifactIds.length) await client.query('DELETE FROM artifacts WHERE id = ANY($1::text[])', [artifactIds]);
+      await client.query('COMMIT');
+      return (result.rowCount ?? 0) > 0;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
   async listModels() { const result = await this.pool.query('SELECT * FROM model_versions ORDER BY created_at DESC'); return result.rows.map(mapModel); }
   async getModel(id: string) { const row = await this.one('SELECT * FROM model_versions WHERE id = $1', [id]); return row ? mapModel(row) : null; }
   async getModelByNameVersion(name: string, version: string) { const row = await this.one('SELECT * FROM model_versions WHERE workspace_id = $1 AND name = $2 AND version = $3', [workspaceId, name, version]); return row ? mapModel(row) : null; }
@@ -677,14 +821,80 @@ export class PgRepository implements Repository {
     }
   }
   async updateModelStage(id: string, stage: ModelVersion['stage']) { const row = await this.one('UPDATE model_versions SET stage = $2 WHERE id = $1 RETURNING *', [id, stage]); return row ? mapModel(row) : null; }
+  async getModelDeletionPlan(id: string) {
+    const model = await this.getModel(id);
+    if (!model) return null;
+    const conversions = await this.pool.query('SELECT * FROM conversion_jobs WHERE workspace_id = $1 AND model_name = $2 AND model_version = $3 ORDER BY created_at', [workspaceId, model.name, model.version]);
+    return { model, conversions: conversions.rows.map(mapConversion) };
+  }
+  async deleteModel(id: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const modelRow = await this.one<Record<string, unknown>>('SELECT * FROM model_versions WHERE id = $1 FOR UPDATE', [id], client);
+      if (!modelRow) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+      const model = mapModel(modelRow);
+      const conversions = await client.query<{ id: string; artifact_id: string | null }>('SELECT id, artifact_id FROM conversion_jobs WHERE workspace_id = $1 AND model_name = $2 AND model_version = $3 FOR UPDATE', [workspaceId, model.name, model.version]);
+      const conversionIds = conversions.rows.map((row) => row.id);
+      const artifactIds = [model.artifactId, ...conversions.rows.map((row) => row.artifact_id)].filter((artifactId): artifactId is string => Boolean(artifactId));
+      if (artifactIds.length) await client.query('UPDATE training_jobs SET artifact_id = NULL WHERE artifact_id = ANY($1::text[])', [artifactIds]);
+      if (conversionIds.length) await client.query('DELETE FROM conversion_jobs WHERE id = ANY($1::text[])', [conversionIds]);
+      await client.query('DELETE FROM model_versions WHERE id = $1', [id]);
+      if (conversionIds.length) await client.query("DELETE FROM artifacts WHERE source_type = 'conversion_job' AND source_id = ANY($1::text[])", [conversionIds]);
+      await client.query("DELETE FROM artifacts WHERE source_type = 'model_upload' AND source_id = $1", [id]);
+      if (artifactIds.length) await client.query('DELETE FROM artifacts WHERE id = ANY($1::text[])', [artifactIds]);
+      await client.query('COMMIT');
+      return true;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
   async listConversions() { const result = await this.pool.query('SELECT * FROM conversion_jobs ORDER BY created_at DESC'); return result.rows.map(mapConversion); }
   async getConversion(id: string) { const row = await this.one('SELECT * FROM conversion_jobs WHERE id = $1', [id]); return row ? mapConversion(row) : null; }
   async createConversion(input: { modelName: string; modelVersion: string; format: ConversionTask['format']; precision: string; target: string; options: Record<string, string | boolean>; createdBy: string }) { const task: ConversionTask = { id: `convert-${randomUUID()}`, ...input, status: 'queued', progress: 0, size: '计算中', createdAt: new Date().toISOString() }; const row = await this.one('INSERT INTO conversion_jobs(id, workspace_id, model_name, model_version, format, precision, target, status, progress, size, created_by, config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *', [task.id, workspaceId, task.modelName, task.modelVersion, task.format, task.precision, task.target, task.status, task.progress, task.size, task.createdBy, JSON.stringify(input.options)]); if (!row) throw new Error('Failed to create conversion job'); return mapConversion(row); }
   async cancelConversion(id: string) { const row = await this.one('UPDATE conversion_jobs SET status = \'cancelled\', updated_at = NOW() WHERE id = $1 AND status IN (\'queued\', \'running\') RETURNING *', [id]); return row ? mapConversion(row) : this.getConversion(id); }
+  async deleteConversion(id: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const task = await this.one<{ artifact_id: string | null }>('SELECT artifact_id FROM conversion_jobs WHERE id = $1 AND workspace_id = $2 FOR UPDATE', [id, workspaceId], client);
+      if (!task) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+      await client.query('DELETE FROM conversion_jobs WHERE id = $1 AND workspace_id = $2', [id, workspaceId]);
+      await client.query("DELETE FROM artifacts WHERE workspace_id = $1 AND source_type = 'conversion_job' AND source_id = $2", [workspaceId, id]);
+      if (task.artifact_id) await client.query('DELETE FROM artifacts WHERE id = $1 AND workspace_id = $2', [task.artifact_id, workspaceId]);
+      await client.query('COMMIT');
+      return true;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
   async createExport(input: { datasetId: string; format: ExportTask['format']; scope: NonNullable<ExportTask['scope']>; versionName: string; includeImages: boolean; createdBy: string }) { const task: ExportTask = { id: `export-${randomUUID()}`, datasetId: input.datasetId, format: input.format, scope: input.scope, versionName: input.versionName, includeImages: input.includeImages, status: 'queued', progress: 0, createdAt: new Date().toISOString() }; await this.pool.query('INSERT INTO export_tasks(id, workspace_id, dataset_id, format, scope, version_name, include_images, status, progress, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [task.id, workspaceId, task.datasetId, task.format, task.scope, task.versionName, task.includeImages, task.status, task.progress, input.createdBy]); return task; }
   async listExports(datasetId: string) { const result = await this.pool.query('SELECT * FROM export_tasks WHERE dataset_id = $1 ORDER BY created_at DESC', [datasetId]); return result.rows.map(mapExport); }
   async getExport(id: string) { const row = await this.one('SELECT * FROM export_tasks WHERE id = $1', [id]); return row ? mapExport(row) : null; }
   async getArtifact(id: string) { const row = await this.one('SELECT * FROM artifacts WHERE id = $1', [id]); return row ? mapArtifact(row) : null; }
+  async listRecentActivities(limit: number) {
+    const result = await this.pool.query(`
+      SELECT audit_logs.*, users.display_name AS actor_name
+      FROM audit_logs
+      LEFT JOIN users ON users.id = audit_logs.actor_id
+      WHERE audit_logs.action <> 'auth.login'
+      ORDER BY audit_logs.created_at DESC, audit_logs.id DESC
+      LIMIT $1
+    `, [limit]);
+    return result.rows.map(mapWorkspaceActivity);
+  }
   async writeAudit(input: { actorId: string; action: string; entityType: string; entityId?: string; metadata?: Record<string, unknown> }) { await this.pool.query('INSERT INTO audit_logs(actor_id, action, entity_type, entity_id, metadata) VALUES ($1,$2,$3,$4,$5)', [input.actorId, input.action, input.entityType, input.entityId ?? null, JSON.stringify(input.metadata ?? {})]); }
 }
 

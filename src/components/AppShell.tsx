@@ -76,14 +76,6 @@ export function AppShell() {
           </button>
         </div>
 
-        <div className="workspace-switch">
-          <div className="workspace-avatar">工</div>
-          <div>
-            <span>工业质检平台</span>
-            <small>默认工作空间</small>
-          </div>
-        </div>
-
         <nav className="main-nav" aria-label="主导航">
           {navItems.map(({ to, label, icon: Icon, end }) => (
             <NavLink

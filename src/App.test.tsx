@@ -19,6 +19,8 @@ describe('platform prototype', () => {
     renderRoute('/');
     expect(screen.getByRole('heading', { name: '工作台' })).toBeInTheDocument();
     expect(within(screen.getByRole('navigation', { name: '主导航' })).getByRole('link', { name: /数据中心/ })).toBeInTheDocument();
+    expect(screen.queryByText('工业质检平台')).not.toBeInTheDocument();
+    expect(screen.queryByText('默认工作空间')).not.toBeInTheDocument();
     expect(screen.getByText('训练运行')).toBeInTheDocument();
     expect(screen.getByText('暂无训练任务')).toBeInTheDocument();
   });

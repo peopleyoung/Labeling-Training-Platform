@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { AuthUser, Dataset, ModelVersion, TrainingJob } from '../shared/contracts';
+import type { AuthUser, ConversionTask, Dataset, ModelVersion, TrainingJob } from '../shared/contracts';
 import { buildApi } from './api';
 import { loadConfig } from './config';
 import { MemoryTaskQueue, QueueTaskActiveError, type ExecutionTarget, type QueueTaskKind, type RemoveQueueTaskOptions } from './queue';
@@ -20,7 +20,7 @@ const testDatasets: Dataset[] = [
   { id: 'test-segmentation-dataset', name: 'Test Segmentation Dataset', description: 'API test fixture', version: 'v1', images: 1, annotated: 1, classes: ['defect'], updatedAt: new Date(0).toISOString(), size: '1 KB', status: '可训练' },
   { id: 'test-keypoint-dataset', name: 'Test Keypoint Dataset', description: 'API test fixture', version: 'v1', images: 1, annotated: 1, classes: ['joint'], updatedAt: new Date(0).toISOString(), size: '1 KB', status: '可训练' },
 ];
-const testModelVersion = 'train-00000000-0000-4000-8000-000000000000';
+const testModelVersion = '00000000-0000-4000-8000-000000000000';
 const testModel: ModelVersion = { id: 'test-model', name: 'Test Model', version: testModelVersion, task: 'detection', sourceJob: testModelVersion, metricName: '待评估', metricValue: '--', framework: 'TorchScript', size: '1 KB', createdAt: new Date(0).toISOString(), formats: [], stage: '评估中', artifactId: 'artifact-test-model' };
 const testSdxlVersion = 'train-11111111-1111-4111-8111-111111111111';
 const testSdxlModel: ModelVersion = { id: 'test-sdxl-model', name: 'Test SDXL', version: testSdxlVersion, task: 'sdxl', sourceJob: testSdxlVersion, metricName: 'Loss', metricValue: '0.1', framework: 'Diffusers SDXL LoRA / PyTorch', size: '1 KB', createdAt: new Date(0).toISOString(), formats: [], stage: '评估中', artifactId: 'artifact-test-sdxl' };
@@ -39,7 +39,7 @@ const failedTrainingJob: TrainingJob = {
   createdAt: new Date(0).toISOString(),
   eta: '训练失败',
   errorMessage: 'Worker exited unexpectedly',
-  config: { type: 'detection', dataFormat: 'YOLO', name: 'Failed YOLO Job', datasetId: 'test-detection-dataset', model: 'yolov8m', weightSource: 'pretrained', epochs: 100, batchSize: 8, learningRate: '0.001', imageSize: 640, gpu: '1 × T4 16G', mixedPrecision: true, earlyStopping: true },
+  config: { type: 'detection', dataFormat: 'YOLO', name: 'Failed YOLO Job', version: 'v1', datasetId: 'test-detection-dataset', model: 'yolov8m', weightSource: 'pretrained', epochs: 100, batchSize: 8, learningRate: '0.001', imageSize: 640, gpu: '1 × T4 16G', mixedPrecision: true, earlyStopping: true },
 };
 const repositoryFixtures = { users: testUsers, datasets: testDatasets };
 
@@ -96,6 +96,27 @@ describe('product API', () => {
     expect(response.json()).toMatchObject({ username: 'admin', role: 'admin', mustChangePassword: false });
   });
 
+  it('returns recent audited workspace activities without login noise', async () => {
+    const unauthorized = await app.inject({ method: 'GET', url: '/api/v1/activities' });
+    expect(unauthorized.statusCode).toBe(401);
+
+    const token = await login();
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/datasets',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Activity Dataset', description: 'activity feed test', version: 'v1', classes: ['defect'] },
+    });
+    expect(created.statusCode).toBe(201);
+
+    const response = await app.inject({ method: 'GET', url: '/api/v1/activities', headers: { authorization: `Bearer ${token}` } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      items: [{ action: 'dataset.create', entityType: 'dataset', metadata: { name: 'Activity Dataset' }, actor: { id: 'test-engineer', displayName: 'Test Engineer' } }],
+    });
+    expect(response.json<{ items: Array<{ action: string }> }>().items.some((activity) => activity.action === 'auth.login')).toBe(false);
+  });
+
   it('allows browser preflight for every mutating API method', async () => {
     for (const method of ['PUT', 'PATCH', 'DELETE']) {
       const response = await app.inject({
@@ -127,7 +148,7 @@ describe('product API', () => {
 
     const training = await app.inject({ method: 'POST', url: '/api/v1/training/jobs', headers: { authorization: `Bearer ${token}` }, payload: { type: 'detection', dataFormat: 'YOLO', name: 'CPU-only test job', datasetId: 'test-detection-dataset', model: 'yolov8m', epochs: 100, batchSize: 8, learningRate: '0.001', imageSize: 640, gpu: '1 × T4 16G', mixedPrecision: true, earlyStopping: true } });
     expect(training.statusCode).toBe(202);
-    expect(training.json()).toMatchObject({ status: 'queued', gpu: 'CPU', config: { gpu: 'CPU', mixedPrecision: false, weightSource: 'pretrained' } });
+    expect(training.json()).toMatchObject({ status: 'queued', gpu: 'CPU', config: { version: 'v1', gpu: 'CPU', mixedPrecision: false, weightSource: 'pretrained' } });
     expect(queue.tasks).toContainEqual({ kind: 'training', taskId: training.json<{ id: string }>().id, executionTarget: 'cpu' });
 
     const sdxlTraining = await app.inject({ method: 'POST', url: '/api/v1/training/jobs', headers: { authorization: `Bearer ${token}` }, payload: { type: 'sdxl', dataFormat: 'IMAGE_FOLDER', name: 'CPU SDXL rejection', datasetId: 'test-detection-dataset', model: 'sdxl-1.0-lora', weightSource: 'pretrained', epochs: 10, batchSize: 1, learningRate: '0.0001', imageSize: 1024, gpu: 'CPU', mixedPrecision: false, earlyStopping: false } });
@@ -214,7 +235,8 @@ describe('product API', () => {
     expect(cancelled.json()).toMatchObject({ status: 'cancelled' });
     expect(queue.tasks).not.toContainEqual({ kind: 'training', taskId: queuedJob.id, executionTarget: 'cpu' });
     const deleted = await app.inject({ method: 'DELETE', url: `/api/v1/training/jobs/${queuedJob.id}`, headers: { authorization: `Bearer ${token}` } });
-    expect(deleted.statusCode).toBe(204);
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toMatchObject({ removedModels: 0, removedConversions: 0 });
     expect(await repository.getTrainingJob(queuedJob.id)).toBeNull();
     expect(await repository.listTrainingEvents(queuedJob.id)).toEqual([]);
     expect(queue.tasks).not.toContainEqual({ kind: 'training', taskId: queuedJob.id, executionTarget: 'cpu' });
@@ -223,7 +245,7 @@ describe('product API', () => {
     const forbidden = await app.inject({ method: 'DELETE', url: `/api/v1/training/jobs/${failedTrainingJob.id}`, headers: { authorization: `Bearer ${annotatorToken}` } });
     expect(forbidden.statusCode).toBe(403);
     const sourceDeleted = await app.inject({ method: 'DELETE', url: `/api/v1/training/jobs/${failedTrainingJob.id}`, headers: { authorization: `Bearer ${token}` } });
-    expect(sourceDeleted.statusCode).toBe(204);
+    expect(sourceDeleted.statusCode).toBe(200);
     const missing = await app.inject({ method: 'DELETE', url: `/api/v1/training/jobs/${failedTrainingJob.id}`, headers: { authorization: `Bearer ${token}` } });
     expect(missing.statusCode).toBe(404);
   });
@@ -241,9 +263,73 @@ describe('product API', () => {
     expect(cancelled.statusCode).toBe(200);
     expect(cancelled.json()).toMatchObject({ status: 'cancelled' });
     const deleted = await app.inject({ method: 'DELETE', url: `/api/v1/training/jobs/${runningJob.id}`, headers: { authorization: `Bearer ${token}` } });
-    expect(deleted.statusCode).toBe(204);
+    expect(deleted.statusCode).toBe(200);
     expect(finishingQueue.removeOptions).toEqual([undefined, { waitForActiveMs: 10_000 }]);
     expect(await repository.getTrainingJob(runningJob.id)).toBeNull();
+  });
+
+  it('deletes a training job together with derived models, conversions, and artifact directories', async () => {
+    const artifactRoot = await mkdtemp(join(tmpdir(), 'forge-training-delete-'));
+    await app.close();
+    const derivedModel: ModelVersion = { ...testModel, id: 'model-derived', name: 'Derived Model', version: 'v1', sourceJob: failedTrainingJob.id, artifactId: 'artifact-derived' };
+    const conversion: ConversionTask = { id: 'convert-derived', modelName: derivedModel.name, modelVersion: derivedModel.version, format: 'ONNX', precision: 'FP32', target: 'Intel CPU', status: 'completed', progress: 100, size: '1 KB', createdAt: new Date(0).toISOString(), artifactId: 'artifact-converted' };
+    const repository = new MemoryRepository({ ...repositoryFixtures, jobs: [failedTrainingJob], models: [derivedModel], conversions: [conversion] });
+    app = await buildApi({ config: loadConfig({ JWT_SECRET: 'test-secret', CORS_ORIGIN: 'http://localhost:5173', FORGE_ARTIFACT_ROOT: artifactRoot }), repository, queue });
+    await mkdir(join(artifactRoot, 'training', failedTrainingJob.id), { recursive: true });
+    await mkdir(join(artifactRoot, 'conversions', conversion.id), { recursive: true });
+    await writeFile(join(artifactRoot, 'training', failedTrainingJob.id, 'best.pt'), 'training artifact');
+    await writeFile(join(artifactRoot, 'conversions', conversion.id, 'model.onnx'), 'conversion artifact');
+    try {
+      const token = await login();
+      const deleted = await app.inject({ method: 'DELETE', url: `/api/v1/training/jobs/${failedTrainingJob.id}`, headers: { authorization: `Bearer ${token}` } });
+      expect(deleted.statusCode).toBe(200);
+      expect(deleted.json()).toMatchObject({ removedModels: 1, removedConversions: 1, removedFiles: 2 });
+      expect(deleted.json<{ releasedBytes: number }>().releasedBytes).toBeGreaterThan(0);
+      expect(await repository.listModels()).toEqual([]);
+      expect(await repository.listConversions()).toEqual([]);
+      await expect(stat(join(artifactRoot, 'training', failedTrainingJob.id))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(join(artifactRoot, 'conversions', conversion.id))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(artifactRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('deletes terminal conversion tasks, queue records, and artifact directories', async () => {
+    const artifactRoot = await mkdtemp(join(tmpdir(), 'forge-conversion-delete-'));
+    await app.close();
+    queue = new MemoryTaskQueue();
+    const completed: ConversionTask = { id: 'convert-completed', modelName: 'Test Model', modelVersion: 'v1', format: 'ONNX', precision: 'FP32', target: 'Intel CPU', status: 'completed', progress: 100, size: '1 KB', createdAt: new Date(0).toISOString(), artifactId: 'artifact-converted' };
+    const running: ConversionTask = { ...completed, id: 'convert-running', format: 'OpenVINO', status: 'running', progress: 50, artifactId: undefined };
+    const repository = new MemoryRepository({ ...repositoryFixtures, conversions: [completed, running] });
+    await queue.enqueue('conversion', completed.id, 'cpu');
+    await queue.enqueue('conversion', completed.id, 'gpu');
+    app = await buildApi({ config: loadConfig({ JWT_SECRET: 'test-secret', CORS_ORIGIN: 'http://localhost:5173', FORGE_ARTIFACT_ROOT: artifactRoot }), repository, queue });
+    await mkdir(join(artifactRoot, 'conversions', completed.id), { recursive: true });
+    await writeFile(join(artifactRoot, 'conversions', completed.id, 'model.onnx'), 'conversion artifact');
+    try {
+      const token = await login();
+      const activeDelete = await app.inject({ method: 'DELETE', url: `/api/v1/conversions/${running.id}`, headers: { authorization: `Bearer ${token}` } });
+      expect(activeDelete.statusCode).toBe(409);
+      expect(activeDelete.json()).toMatchObject({ error: { code: 'CONVERSION_DELETE_NOT_ALLOWED' } });
+
+      const annotatorToken = await login('annotator');
+      const forbidden = await app.inject({ method: 'DELETE', url: `/api/v1/conversions/${completed.id}`, headers: { authorization: `Bearer ${annotatorToken}` } });
+      expect(forbidden.statusCode).toBe(403);
+
+      const deleted = await app.inject({ method: 'DELETE', url: `/api/v1/conversions/${completed.id}`, headers: { authorization: `Bearer ${token}` } });
+      expect(deleted.statusCode).toBe(200);
+      expect(deleted.json()).toMatchObject({ removedConversions: 1, removedFiles: 1 });
+      expect(deleted.json<{ releasedBytes: number }>().releasedBytes).toBeGreaterThan(0);
+      expect(await repository.getConversion(completed.id)).toBeNull();
+      expect(queue.tasks).not.toContainEqual({ kind: 'conversion', taskId: completed.id, executionTarget: 'cpu' });
+      expect(queue.tasks).not.toContainEqual({ kind: 'conversion', taskId: completed.id, executionTarget: 'gpu' });
+      await expect(stat(join(artifactRoot, 'conversions', completed.id))).rejects.toMatchObject({ code: 'ENOENT' });
+
+      const missing = await app.inject({ method: 'DELETE', url: `/api/v1/conversions/${completed.id}`, headers: { authorization: `Bearer ${token}` } });
+      expect(missing.statusCode).toBe(404);
+    } finally {
+      await rm(artifactRoot, { recursive: true, force: true });
+    }
   });
 
   it('persists annotation revisions and rejects stale writes', async () => {
@@ -321,18 +407,21 @@ describe('product API', () => {
       expect(ready.json()).toMatchObject({ images: 1, annotated: 1, status: '可训练' });
 
       const deleted = await app.inject({ method: 'DELETE', url: `/api/v1/datasets/${dataset.id}`, headers: { authorization: `Bearer ${token}` } });
-      expect(deleted.statusCode).toBe(204);
-      expect(await readdir(join(artifactRoot, 'datasets', dataset.id))).toEqual([]);
+      expect(deleted.statusCode).toBe(200);
+      expect(deleted.json<{ releasedBytes: number }>().releasedBytes).toBeGreaterThan(0);
+      await expect(stat(join(artifactRoot, 'datasets', dataset.id))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(artifactRoot, { recursive: true, force: true });
     }
   });
 
   it('validates model, dataset and conversion compatibility before queueing', async () => {
+    await app.close();
+    app = await buildApi({ config: loadConfig({ JWT_SECRET: 'test-secret', CORS_ORIGIN: 'http://localhost:5173', FORGE_GPU_ENABLED: 'true' }), repository: new MemoryRepository({ ...repositoryFixtures, models: [testModel] }), queue });
     const token = await login();
-    const training = await app.inject({ method: 'POST', url: '/api/v1/training/jobs', headers: { authorization: `Bearer ${token}` }, payload: { type: 'detection', dataFormat: 'VOC', name: 'Test YOLOv8 Job', datasetId: 'test-detection-dataset', model: 'yolov8m', epochs: 100, batchSize: 8, learningRate: '0.001', imageSize: 640, gpu: '1 × T4 16G', mixedPrecision: true, earlyStopping: true } });
+    const training = await app.inject({ method: 'POST', url: '/api/v1/training/jobs', headers: { authorization: `Bearer ${token}` }, payload: { type: 'detection', dataFormat: 'VOC', name: 'Test YOLOv8 Job', version: 'v2.3.0', datasetId: 'test-detection-dataset', model: 'yolov8m', epochs: 100, batchSize: 8, learningRate: '0.001', imageSize: 640, gpu: '1 × T4 16G', mixedPrecision: true, earlyStopping: true } });
     expect(training.statusCode).toBe(202);
-    expect(training.json()).toMatchObject({ status: 'queued', model: 'yolov8m' });
+    expect(training.json()).toMatchObject({ status: 'queued', model: 'yolov8m', config: { version: 'v2.3.0' } });
     expect(queue.tasks).toContainEqual({ kind: 'training', taskId: training.json<{ id: string }>().id, executionTarget: 'gpu' });
     const events = await app.inject({ method: 'GET', url: `/api/v1/training/jobs/${training.json<{ id: string }>().id}/events`, headers: { authorization: `Bearer ${token}` } });
     expect(events.statusCode).toBe(200);
@@ -345,6 +434,10 @@ describe('product API', () => {
     expect(incompatibleFormat.statusCode).toBe(400);
     expect(incompatibleFormat.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR', fields: { dataFormat: '数据格式与训练任务不兼容' } } });
 
+    const duplicateVersion = await app.inject({ method: 'POST', url: '/api/v1/training/jobs', headers: { authorization: `Bearer ${token}` }, payload: { type: 'detection', dataFormat: 'YOLO', name: testModel.name, version: testModel.version, datasetId: 'test-detection-dataset', model: 'yolov8m', epochs: 1, batchSize: 1, learningRate: '0.001', imageSize: 128, gpu: '1 × T4 16G', mixedPrecision: true, earlyStopping: true } });
+    expect(duplicateVersion.statusCode).toBe(409);
+    expect(duplicateVersion.json()).toMatchObject({ error: { code: 'MODEL_VERSION_EXISTS' } });
+
     const invalidConversion = await app.inject({ method: 'POST', url: '/api/v1/conversions', headers: { authorization: `Bearer ${token}` }, payload: { modelName: 'Test Model', modelVersion: 'v1', format: 'TensorRT', precision: 'INT8', target: 'NVIDIA T4' } });
     expect(invalidConversion.statusCode).toBe(400);
     expect(invalidConversion.json()).toMatchObject({ error: { code: 'UNSUPPORTED_CONVERSION_CONFIG' } });
@@ -353,7 +446,8 @@ describe('product API', () => {
   it('uploads, registers, downloads, and archives a model version', async () => {
     const artifactRoot = await mkdtemp(join(tmpdir(), 'forge-model-upload-'));
     await app.close();
-    app = await buildApi({ config: loadConfig({ JWT_SECRET: 'test-secret', CORS_ORIGIN: 'http://localhost:5173', FORGE_ARTIFACT_ROOT: artifactRoot }), repository: new MemoryRepository({ users: testUsers }), queue });
+    const repository = new MemoryRepository({ users: testUsers });
+    app = await buildApi({ config: loadConfig({ JWT_SECRET: 'test-secret', CORS_ORIGIN: 'http://localhost:5173', FORGE_ARTIFACT_ROOT: artifactRoot }), repository, queue });
     try {
       const token = await login();
       const uploaded = await app.inject({ method: 'PUT', url: '/api/v1/models/upload', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream', 'x-file-name': encodeURIComponent('weights.pt'), 'x-file-mime-type': 'application/octet-stream', 'x-model-name': encodeURIComponent('焊点检测模型'), 'x-model-version': encodeURIComponent('v1'), 'x-model-task': 'detection', 'x-model-framework': encodeURIComponent('PyTorch'), 'x-model-stage': encodeURIComponent('评估中') }, payload: Buffer.from('model bytes') });
@@ -368,6 +462,19 @@ describe('product API', () => {
       const download = await app.inject({ method: 'GET', url: `/api/v1/artifacts/${model.artifactId}/download`, headers: { authorization: `Bearer ${token}` } });
       expect(download.statusCode).toBe(200);
       expect(download.body).toBe('model bytes');
+
+      const conversionResponse = await app.inject({ method: 'POST', url: '/api/v1/conversions', headers: { authorization: `Bearer ${token}` }, payload: { modelName: '焊点检测模型', modelVersion: 'v1', format: 'ONNX', precision: 'FP32', target: 'Intel CPU' } });
+      expect(conversionResponse.statusCode).toBe(202);
+      const conversion = conversionResponse.json<ConversionTask>();
+      await mkdir(join(artifactRoot, 'conversions', conversion.id), { recursive: true });
+      await writeFile(join(artifactRoot, 'conversions', conversion.id, 'model.onnx'), 'converted bytes');
+      const deleted = await app.inject({ method: 'DELETE', url: `/api/v1/models/${model.id}`, headers: { authorization: `Bearer ${token}` } });
+      expect(deleted.statusCode).toBe(200);
+      expect(deleted.json()).toMatchObject({ removedModels: 1, removedConversions: 1, removedFiles: 2 });
+      expect(await repository.getModel(model.id)).toBeNull();
+      expect(await repository.getConversion(conversion.id)).toBeNull();
+      await expect(stat(join(artifactRoot, 'models', model.id))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(join(artifactRoot, 'conversions', conversion.id))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(artifactRoot, { recursive: true, force: true });
     }

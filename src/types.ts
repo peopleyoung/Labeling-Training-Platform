@@ -22,6 +22,7 @@ export type {
   JobStatus,
   LoginResponse,
   ModelVersion,
+  ResourceDeletionResult,
   RuntimeCapabilities,
   TrainingDraft,
   TrainingDataFormat,
@@ -32,4 +33,5 @@ export type {
   TrainingResourceSample,
   TrainingType,
   UserRole,
+  WorkspaceActivity,
 } from '../shared/contracts';

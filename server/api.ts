@@ -7,11 +7,12 @@ import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
 import bcrypt from 'bcryptjs';
 import { ZodError, type ZodType } from 'zod';
-import type { AuthUser, ConversionTask, RuntimeCapabilities, TrainingDraft, UserRole } from '../shared/contracts';
+import type { AuthUser, ConversionTask, ResourceDeletionResult, RuntimeCapabilities, TrainingDraft, UserRole } from '../shared/contracts';
 import { conversionCatalog, findModelVariant, modelCatalog } from '../shared/modelCatalog';
 import { annotationReviewDecisionSchema, annotationSaveSchema, conversionRequestSchema, datasetClassesSchema, datasetCreateSchema, exportRequestSchema, loginSchema, modelStageSchema, modelUploadMetadataSchema, trainingDraftSchema } from '../shared/schemas';
 import type { ServerConfig } from './config';
 import { HttpError, RepositoryConflictError, RepositoryStateError, isHttpError } from './errors';
+import { removeManagedArtifactDirectories, type StorageRemovalSummary } from './artifactCleanup';
 import { QueueTaskActiveError, type TaskQueue } from './queue';
 import type { Repository, StoredUser } from './repository';
 
@@ -50,6 +51,15 @@ function getId(request: FastifyRequest, name: string): string {
 
 function decodeHeader(value: string | string[] | undefined, fieldName: string): string {
   try { return decodeURIComponent(String(value ?? '')); } catch { throw new HttpError(400, 'VALIDATION_ERROR', `${fieldName}编码不合法`); }
+}
+
+function deletionResult(storage: StorageRemovalSummary, counts: Partial<Pick<ResourceDeletionResult, 'removedModels' | 'removedConversions' | 'removedExports'>> = {}): ResourceDeletionResult {
+  return {
+    ...storage,
+    removedModels: counts.removedModels ?? 0,
+    removedConversions: counts.removedConversions ?? 0,
+    removedExports: counts.removedExports ?? 0,
+  };
 }
 
 export async function buildApi({ config, repository, queue }: ApiDependencies): Promise<FastifyInstance> {
@@ -97,6 +107,18 @@ export async function buildApi({ config, repository, queue }: ApiDependencies): 
     }
   };
 
+  const removeConversionQueueTasks = async (tasks: readonly ConversionTask[]) => {
+    for (const task of tasks) {
+      try {
+        await queue.remove('conversion', task.id, 'cpu', { waitForActiveMs: 10_000 });
+        await queue.remove('conversion', task.id, 'gpu', { waitForActiveMs: 10_000 });
+      } catch (error) {
+        if (error instanceof QueueTaskActiveError) throw new HttpError(409, 'RESOURCE_DELETE_PENDING', '关联的模型转换进程正在结束，请稍后重试删除');
+        throw error;
+      }
+    }
+  };
+
   const sendArtifactDownload = async (artifactId: string, reply: FastifyReply) => {
     const artifact = await repository.getArtifact(artifactId);
     if (!artifact) throw new HttpError(404, 'ARTIFACT_NOT_FOUND', '产物不存在');
@@ -120,6 +142,7 @@ export async function buildApi({ config, repository, queue }: ApiDependencies): 
     if (!model || model.task !== draft.type) throw new HttpError(400, 'UNSUPPORTED_MODEL', '所选模型不支持当前训练任务');
     if (draft.type === 'sdxl' && !config.gpuEnabled) throw new HttpError(503, 'SDXL_GPU_REQUIRED', 'SDXL 训练需要已启用 CUDA 的 GPU Worker');
     if (draft.type === 'sdxl' && draft.weightSource !== 'pretrained') throw new HttpError(400, 'SDXL_BASE_MODEL_REQUIRED', 'SDXL LoRA 训练必须使用预置的 SDXL Base 模型');
+    if (await repository.getModelByNameVersion(draft.name, draft.version)) throw new HttpError(409, 'MODEL_VERSION_EXISTS', '同名模型版本已存在，请修改任务名称或模型版本');
     const dataset = await repository.getDataset(draft.datasetId);
     if (!dataset) throw new HttpError(404, 'DATASET_NOT_FOUND', '数据集不存在');
     if (dataset.status !== '可训练') throw new HttpError(409, 'DATASET_REVIEW_REQUIRED', '数据集全部标注审核通过后才能训练');
@@ -147,6 +170,7 @@ export async function buildApi({ config, repository, queue }: ApiDependencies): 
 
   app.get('/api/v1/auth/me', { preHandler: authenticate }, async (request) => toAuthUser((request as AuthenticatedRequest).currentUser));
   app.get('/api/v1/catalog/models', { preHandler: requireRoles('admin', 'engineer', 'annotator') }, async () => ({ items: modelCatalog }));
+  app.get('/api/v1/activities', { preHandler: requireRoles('admin', 'engineer', 'annotator') }, async () => ({ items: await repository.listRecentActivities(5) }));
 
   app.get('/api/v1/datasets', { preHandler: requireRoles('admin', 'engineer', 'annotator') }, async () => ({ items: await repository.listDatasets() }));
   app.get('/api/v1/datasets/:datasetId', { preHandler: requireRoles('admin', 'engineer', 'annotator') }, async (request) => {
@@ -168,22 +192,21 @@ export async function buildApi({ config, repository, queue }: ApiDependencies): 
   });
   app.delete('/api/v1/datasets/:datasetId', { preHandler: requireRoles('admin', 'engineer') }, async (request, reply) => {
     const datasetId = getId(request, 'datasetId');
-    const images = await repository.listDatasetImages(datasetId);
-    const storedImages = await Promise.all(images.map((image) => repository.getDatasetImage(datasetId, image.id)));
-    const exportArtifacts = await repository.listDatasetArtifacts(datasetId);
+    const plan = await repository.getDatasetDeletionPlan(datasetId);
+    if (!plan) throw new HttpError(404, 'DATASET_NOT_FOUND', '数据集不存在');
+    for (const task of plan.exports) {
+      try {
+        await queue.remove('export', task.id, 'cpu', { waitForActiveMs: 10_000 });
+      } catch (error) {
+        if (error instanceof QueueTaskActiveError) throw new HttpError(409, 'RESOURCE_DELETE_PENDING', '关联的数据导出进程正在结束，请稍后重试删除');
+        throw error;
+      }
+    }
     if (!await repository.deleteDataset(datasetId)) throw new HttpError(404, 'DATASET_NOT_FOUND', '数据集不存在');
-    const root = resolve(config.artifactRoot);
-    for (const stored of storedImages) {
-      if (!stored) continue;
-      const filePath = resolve(root, stored.objectKey);
-      if (filePath.startsWith(`${root}${sep}`)) await unlink(filePath).catch(() => undefined);
-    }
-    for (const artifact of exportArtifacts) {
-      const filePath = resolve(root, artifact.objectKey);
-      if (filePath.startsWith(`${root}${sep}`)) await unlink(filePath).catch(() => undefined);
-    }
-    await repository.writeAudit({ actorId: (request as AuthenticatedRequest).currentUser.id, action: 'dataset.delete', entityType: 'dataset', entityId: datasetId });
-    return reply.status(204).send();
+    const storage = await removeManagedArtifactDirectories(config.artifactRoot, [`datasets/${datasetId}`, ...plan.exports.map((task) => `exports/${task.id}`)]);
+    const result = deletionResult(storage, { removedExports: plan.exports.length });
+    await repository.writeAudit({ actorId: (request as AuthenticatedRequest).currentUser.id, action: 'dataset.delete', entityType: 'dataset', entityId: datasetId, metadata: { ...result } });
+    return reply.send(result);
   });
   app.get('/api/v1/datasets/:datasetId/images', { preHandler: requireRoles('admin', 'engineer', 'annotator') }, async (request) => {
     const datasetId = getId(request, 'datasetId');
@@ -312,7 +335,7 @@ export async function buildApi({ config, repository, queue }: ApiDependencies): 
     const draft = parseBody(trainingDraftSchema, request.body) as TrainingDraft;
     const user = (request as AuthenticatedRequest).currentUser;
     const { job, dataset, executionTarget } = await enqueueTrainingJob(draft, user);
-    await repository.writeAudit({ actorId: user.id, action: 'training.create', entityType: 'training_job', entityId: job.id, metadata: { model: job.model, datasetId: dataset.id, executionTarget } });
+    await repository.writeAudit({ actorId: user.id, action: 'training.create', entityType: 'training_job', entityId: job.id, metadata: { model: job.model, version: draft.version, datasetId: dataset.id, executionTarget } });
     return reply.status(202).send(job);
   });
   app.post('/api/v1/training/jobs/:jobId/retry', { preHandler: requireRoles('admin', 'engineer') }, async (request, reply) => {
@@ -341,8 +364,9 @@ export async function buildApi({ config, repository, queue }: ApiDependencies): 
   });
   app.delete('/api/v1/training/jobs/:jobId', { preHandler: requireRoles('admin', 'engineer') }, async (request, reply) => {
     const jobId = getId(request, 'jobId');
-    const job = await repository.getTrainingJob(jobId);
-    if (!job) throw new HttpError(404, 'TRAINING_JOB_NOT_FOUND', '训练任务不存在');
+    const plan = await repository.getTrainingDeletionPlan(jobId);
+    if (!plan) throw new HttpError(404, 'TRAINING_JOB_NOT_FOUND', '训练任务不存在');
+    const { job } = plan;
     if (job.status === 'queued' || job.status === 'running') throw new HttpError(409, 'TRAINING_DELETE_NOT_ALLOWED', '排队或运行中的任务不能删除，请先停止任务');
     try {
       await queue.remove('training', job.id, job.gpu === 'CPU' ? 'cpu' : 'gpu', { waitForActiveMs: 10_000 });
@@ -350,10 +374,18 @@ export async function buildApi({ config, repository, queue }: ApiDependencies): 
       if (error instanceof QueueTaskActiveError) throw new HttpError(409, 'TRAINING_DELETE_PENDING', '训练进程正在结束，请稍后重试删除');
       throw error;
     }
+    await removeConversionQueueTasks(plan.conversions);
     if (!await repository.deleteTrainingJob(job.id)) throw new HttpError(404, 'TRAINING_JOB_NOT_FOUND', '训练任务不存在');
+    const storage = await removeManagedArtifactDirectories(config.artifactRoot, [
+      `training/${job.id}`,
+      `runtime/training/${job.id}`,
+      ...plan.models.map((model) => `models/${model.id}`),
+      ...plan.conversions.map((task) => `conversions/${task.id}`),
+    ]);
+    const result = deletionResult(storage, { removedModels: plan.models.length, removedConversions: plan.conversions.length });
     const user = (request as AuthenticatedRequest).currentUser;
-    await repository.writeAudit({ actorId: user.id, action: 'training.delete', entityType: 'training_job', entityId: job.id, metadata: { name: job.name, status: job.status, artifactPreserved: Boolean(job.artifactId) } });
-    return reply.status(204).send();
+    await repository.writeAudit({ actorId: user.id, action: 'training.delete', entityType: 'training_job', entityId: job.id, metadata: { name: job.name, status: job.status, ...result } });
+    return reply.send(result);
   });
 
   app.get('/api/v1/models', { preHandler: requireRoles('admin', 'engineer', 'annotator') }, async () => ({ items: await repository.listModels() }));
@@ -402,6 +434,18 @@ export async function buildApi({ config, repository, queue }: ApiDependencies): 
     await repository.writeAudit({ actorId: (request as AuthenticatedRequest).currentUser.id, action: 'model.stage.update', entityType: 'model_version', entityId: model.id, metadata: { stage: model.stage } });
     return model;
   });
+  app.delete('/api/v1/models/:modelId', { preHandler: requireRoles('admin', 'engineer') }, async (request, reply) => {
+    const modelId = getId(request, 'modelId');
+    const plan = await repository.getModelDeletionPlan(modelId);
+    if (!plan) throw new HttpError(404, 'MODEL_NOT_FOUND', '模型版本不存在');
+    await removeConversionQueueTasks(plan.conversions);
+    if (!await repository.deleteModel(modelId)) throw new HttpError(404, 'MODEL_NOT_FOUND', '模型版本不存在');
+    const sourceDirectory = plan.model.sourceJob === 'manual-upload' ? `models/${modelId}` : `training/${plan.model.sourceJob}`;
+    const storage = await removeManagedArtifactDirectories(config.artifactRoot, [sourceDirectory, `models/${modelId}`, ...plan.conversions.map((task) => `conversions/${task.id}`)]);
+    const result = deletionResult(storage, { removedModels: 1, removedConversions: plan.conversions.length });
+    await repository.writeAudit({ actorId: (request as AuthenticatedRequest).currentUser.id, action: 'model.delete', entityType: 'model_version', entityId: modelId, metadata: { name: plan.model.name, version: plan.model.version, ...result } });
+    return reply.send(result);
+  });
   app.get('/api/v1/conversions', { preHandler: requireRoles('admin', 'engineer', 'annotator') }, async () => ({ items: await repository.listConversions() }));
   app.get('/api/v1/conversions/:conversionId', { preHandler: requireRoles('admin', 'engineer', 'annotator') }, async (request) => {
     const task = await repository.getConversion(getId(request, 'conversionId'));
@@ -431,6 +475,18 @@ export async function buildApi({ config, repository, queue }: ApiDependencies): 
     if (!task) throw new HttpError(404, 'CONVERSION_NOT_FOUND', '转换任务不存在');
     await repository.writeAudit({ actorId: (request as AuthenticatedRequest).currentUser.id, action: 'conversion.cancel', entityType: 'conversion_job', entityId: task.id });
     return task;
+  });
+  app.delete('/api/v1/conversions/:conversionId', { preHandler: requireRoles('admin', 'engineer') }, async (request, reply) => {
+    const conversionId = getId(request, 'conversionId');
+    const task = await repository.getConversion(conversionId);
+    if (!task) throw new HttpError(404, 'CONVERSION_NOT_FOUND', '转换任务不存在');
+    if (task.status === 'queued' || task.status === 'running') throw new HttpError(409, 'CONVERSION_DELETE_NOT_ALLOWED', '排队或运行中的转换任务不能删除，请先取消任务');
+    await removeConversionQueueTasks([task]);
+    if (!await repository.deleteConversion(conversionId)) throw new HttpError(404, 'CONVERSION_NOT_FOUND', '转换任务不存在');
+    const storage = await removeManagedArtifactDirectories(config.artifactRoot, [`conversions/${conversionId}`]);
+    const result = deletionResult(storage, { removedConversions: 1 });
+    await repository.writeAudit({ actorId: (request as AuthenticatedRequest).currentUser.id, action: 'conversion.delete', entityType: 'conversion_job', entityId: conversionId, metadata: { modelName: task.modelName, modelVersion: task.modelVersion, format: task.format, status: task.status, ...result } });
+    return reply.send(result);
   });
 
   return app;

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { AlertTriangle, ArrowRight, Plus, RotateCcw, Search, Server, Sparkles, Trash2 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Modal, PageHeader, ProgressBar, SegmentedControl, StatusBadge } from '../components/ui';
+import { Modal, PageHeader, Pagination, ProgressBar, SegmentedControl, StatusBadge } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { taskLabels } from '../data/catalog';
 import type { JobStatus, TrainingJob } from '../types';
@@ -13,10 +13,14 @@ export function TrainingPage() {
   const { jobs, session, retryTrainingJob, deleteTrainingJob, notify } = useApp();
   const [filter, setFilter] = useState<JobFilter>('all');
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TrainingJob | null>(null);
   const [deletingJobId, setDeletingJobId] = useState<string | null>(null);
-  const visibleJobs = useMemo(() => jobs.filter((job) => (filter === 'all' || job.status === filter) && `${job.name}${job.model}${job.dataset}`.toLowerCase().includes(query.toLowerCase())), [jobs, filter, query]);
+  const filteredJobs = useMemo(() => jobs.filter((job) => (filter === 'all' || job.status === filter) && `${job.name}${job.config?.version ?? ''}${job.model}${job.dataset}`.toLowerCase().includes(query.toLowerCase())), [jobs, filter, query]);
+  const currentPage = Math.min(page, Math.max(1, Math.ceil(filteredJobs.length / pageSize)));
+  const visibleJobs = useMemo(() => filteredJobs.slice((currentPage - 1) * pageSize, currentPage * pageSize), [currentPage, filteredJobs, pageSize]);
   const runningCount = jobs.filter((item) => item.status === 'running').length;
   const queuedCount = jobs.filter((item) => item.status === 'queued').length;
   const completedCount = jobs.filter((item) => item.status === 'completed').length;
@@ -61,10 +65,10 @@ export function TrainingPage() {
         <SegmentedControl<JobFilter>
           ariaLabel="训练状态筛选"
           value={filter}
-          onChange={setFilter}
+          onChange={(value) => { setFilter(value); setPage(1); }}
           options={[{ value: 'all', label: '全部' }, { value: 'running', label: '运行中' }, { value: 'queued', label: '排队中' }, { value: 'completed', label: '已完成' }, { value: 'failed', label: '失败' }]}
         />
-        <div className="toolbar-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索训练任务" /></div>
+        <div className="toolbar-search"><Search size={16} /><input value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder="搜索训练任务或版本" /></div>
       </section>
 
       <section className="table-panel">
@@ -74,7 +78,7 @@ export function TrainingPage() {
             <tbody>
               {visibleJobs.map((job) => (
                 <tr key={job.id}>
-                  <td><Link className="training-name-cell" to={`/training/${job.id}`}><span className={`task-type-icon ${job.type}`}><Sparkles size={18} /></span><div><strong>{job.name}</strong><span>{taskLabels[job.type]} · {job.model}</span><small>{job.dataset}</small></div></Link></td>
+                  <td><Link className="training-name-cell" to={`/training/${job.id}`}><span className={`task-type-icon ${job.type}`}><Sparkles size={18} /></span><div><strong>{job.name}</strong><span>{taskLabels[job.type]} · {job.model} · {job.config?.version ?? '历史版本'}</span><small>{job.dataset}</small></div></Link></td>
                   <td><div className="status-progress"><StatusBadge status={job.status} />{job.status !== 'completed' && job.status !== 'failed' && <ProgressBar value={job.progress} />}{job.status === 'failed' && <span className="failure-reason"><AlertTriangle size={14} />{job.eta}</span>}</div></td>
                   <td><strong>{job.epoch}</strong><span className="cell-subtext">{job.status === 'running' ? job.eta : job.status === 'queued' ? '等待资源' : '训练结束'}</span></td>
                   <td><span className="metric-cell"><small>{job.metricName}</small><strong>{job.metricValue}</strong></span></td>
@@ -86,9 +90,10 @@ export function TrainingPage() {
             </tbody>
           </table>
         </div>
-        {visibleJobs.length === 0 && <div className="empty-table"><Search size={24} /><strong>{jobs.length ? '没有匹配的训练任务' : '暂无训练任务'}</strong><span>{jobs.length ? '调整状态筛选或搜索内容' : '准备数据后创建首个训练任务'}</span></div>}
+        {filteredJobs.length > 0 && <Pagination page={currentPage} pageSize={pageSize} totalItems={filteredJobs.length} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} />}
+        {filteredJobs.length === 0 && <div className="empty-table"><Search size={24} /><strong>{jobs.length ? '没有匹配的训练任务' : '暂无训练任务'}</strong><span>{jobs.length ? '调整状态筛选或搜索内容' : '准备数据后创建首个训练任务'}</span></div>}
       </section>
-      {deleteTarget && <Modal title="删除训练任务" description={`确认删除“${deleteTarget.name}”？`} onClose={() => !deletingJobId && setDeleteTarget(null)} footer={<><button className="button secondary" disabled={Boolean(deletingJobId)} onClick={() => setDeleteTarget(null)}>取消</button><button className="button danger" disabled={Boolean(deletingJobId)} onClick={() => void remove()}>{deletingJobId ? '正在删除' : '确认删除'}</button></>}><p className="modal-warning-copy">任务历史、日志、训练指标和资源采样将被永久删除。已经登记的模型版本和制品会继续保留。</p></Modal>}
+      {deleteTarget && <Modal title="删除训练任务及产物" description={`确认删除“${deleteTarget.name}”？`} onClose={() => !deletingJobId && setDeleteTarget(null)} footer={<><button className="button secondary" disabled={Boolean(deletingJobId)} onClick={() => setDeleteTarget(null)}>取消</button><button className="button danger" disabled={Boolean(deletingJobId)} onClick={() => void remove()}>{deletingJobId ? '正在删除' : '确认删除'}</button></>}><p className="modal-warning-copy">任务历史、日志、训练指标、权重文件，以及由该任务生成的模型版本和转换产物都将被永久删除。</p></Modal>}
     </div>
   );
 }

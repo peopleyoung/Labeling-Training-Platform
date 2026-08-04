@@ -211,6 +211,31 @@ docker compose restart cpu-worker
 
 不要使用 `docker compose down -v` 进行普通重启；`-v` 会删除 PostgreSQL、Redis、MinIO 和 Worker 产物卷。
 
+### 5.1 删除与磁盘清理
+
+管理员或算法工程师在页面删除业务资源时，平台会同步清理其数据库记录和共享卷产物：
+
+- 删除数据集：删除原始图像、标注记录、导出任务及导出 ZIP。
+- 删除训练任务：删除日志、指标、资源采样、训练输出，以及该任务生成的模型版本和转换产物。
+- 删除模型：删除原始模型权重、关联转换任务及其产物。训练任务记录仍保留，但不再提供已删除的模型下载。
+- 删除转换任务：删除终态转换记录、CPU/GPU 队列中的保留任务、产物元数据和对应的 `conversions/<任务ID>` 目录。
+
+活动中的训练或转换任务必须先取消。删除接口会等待 BullMQ 任务释放活动锁；关联导出或转换仍在结束时会返回冲突，稍后重试即可。页面成功提示会显示本次实际释放的磁盘空间。
+
+升级历史版本后，先用 dry-run 检查“数据库记录已删除但目录仍残留”的孤立产物：
+
+```bash
+docker compose exec -T api npm run artifacts:cleanup
+```
+
+确认输出中的 `danglingModelIds`、`orphanConversionIds`、`orphanArtifactIds` 和 `storage.directories` 都属于应删除内容后，再执行：
+
+```bash
+docker compose exec -T api npm run artifacts:cleanup -- --execute
+```
+
+该命令只处理 `/data/artifacts` 下受管的数据集、导出、训练、转换、上传模型和运行时目录，并在删除前再次校验数据库引用。排队或运行中的记录会保留；`/data/model-cache` 预训练权重缓存永远不在清理范围内。执行前仍应按第 6 节完成 PostgreSQL 与 Worker 产物卷备份。
+
 ## 6. 备份与恢复
 
 在升级前和定期任务中备份 PostgreSQL、MinIO 和 Worker 产物。以下命令假设 `COMPOSE_PROJECT_NAME=forge-ai`，备份文件保存在项目的 `backups/` 中：

@@ -1,4 +1,4 @@
-import { CheckCircle2, Info, X, type LucideIcon } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Info, X, type LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useApp } from '../context/AppContext';
 import type { JobStatus } from '../types';
@@ -92,5 +92,42 @@ export function SegmentedControl<T extends string>({ options, value, onChange, a
         </button>
       ))}
     </div>
+  );
+}
+
+const pageSizeOptions = [10, 20, 50] as const;
+
+export function Pagination({ page, pageSize, totalItems, onPageChange, onPageSizeChange }: {
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const currentPage = Math.min(Math.max(1, page), totalPages);
+  const firstItem = totalItems ? (currentPage - 1) * pageSize + 1 : 0;
+  const lastItem = Math.min(currentPage * pageSize, totalItems);
+
+  return (
+    <nav className="pagination" aria-label="列表分页">
+      <div className="pagination-summary">
+        <span>共 {totalItems} 条</span>
+        <label>
+          <span>每页</span>
+          <select aria-label="每页显示条数" value={pageSize} onChange={(event) => onPageSizeChange(Number(event.target.value))}>
+            {pageSizeOptions.map((size) => <option value={size} key={size}>{size} 条</option>)}
+          </select>
+        </label>
+        <span>{firstItem}-{lastItem} 条</span>
+      </div>
+      <div className="pagination-controls">
+        <button type="button" className="icon-button bordered" disabled={currentPage === 1} onClick={() => onPageChange(1)} title="第一页" aria-label="第一页"><ChevronsLeft size={15} /></button>
+        <button type="button" className="icon-button bordered" disabled={currentPage === 1} onClick={() => onPageChange(currentPage - 1)} title="上一页" aria-label="上一页"><ChevronLeft size={15} /></button>
+        <span>第 <strong>{currentPage}</strong> / {totalPages} 页</span>
+        <button type="button" className="icon-button bordered" disabled={currentPage === totalPages} onClick={() => onPageChange(currentPage + 1)} title="下一页" aria-label="下一页"><ChevronRight size={15} /></button>
+        <button type="button" className="icon-button bordered" disabled={currentPage === totalPages} onClick={() => onPageChange(totalPages)} title="最后一页" aria-label="最后一页"><ChevronsRight size={15} /></button>
+      </div>
+    </nav>
   );
 }

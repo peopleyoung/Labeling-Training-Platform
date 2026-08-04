@@ -3,9 +3,63 @@ import { Link } from 'react-router-dom';
 import { EmptyState, PageHeader, ProgressBar, StatusBadge } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { taskLabels } from '../data/catalog';
+import type { WorkspaceActivity } from '../types';
+
+type ActivityTone = 'blue' | 'green' | 'orange';
+
+function metadataText(activity: WorkspaceActivity, key: string) {
+  const value = activity.metadata[key];
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : undefined;
+}
+
+export function describeActivity(activity: WorkspaceActivity): { title: string; detail: string; tone: ActivityTone } {
+  const actor = activity.actor?.displayName ?? '系统';
+  const name = metadataText(activity, 'name');
+  const version = metadataText(activity, 'version');
+  const model = metadataText(activity, 'model');
+  const format = metadataText(activity, 'format');
+  const filename = metadataText(activity, 'filename');
+  const stage = metadataText(activity, 'stage');
+  const count = metadataText(activity, 'count');
+
+  switch (activity.action) {
+    case 'dataset.create': return { title: name ? `创建数据集：${name}` : '创建数据集', detail: actor, tone: 'blue' };
+    case 'dataset.classes.update': return { title: '更新数据集类别', detail: actor, tone: 'blue' };
+    case 'dataset.image.upload': return { title: filename ? `上传图像：${filename}` : '上传数据集图像', detail: actor, tone: 'blue' };
+    case 'dataset.delete': return { title: '删除数据集及产物', detail: actor, tone: 'orange' };
+    case 'dataset.export.create': return { title: format ? `创建 ${format} 数据导出` : '创建数据导出', detail: actor, tone: 'blue' };
+    case 'annotation.save': return { title: count ? `保存标注：${count} 个对象` : '保存图像标注', detail: actor, tone: 'blue' };
+    case 'annotation.review.submit': return { title: '提交标注审核', detail: actor, tone: 'blue' };
+    case 'annotation.review.approve': return { title: '审核通过标注', detail: actor, tone: 'green' };
+    case 'annotation.review.reject': return { title: '退回标注', detail: actor, tone: 'orange' };
+    case 'training.create': return { title: '创建训练任务', detail: [actor, model, version].filter(Boolean).join(' · '), tone: 'green' };
+    case 'training.retry': return { title: '重新提交训练任务', detail: [actor, model].filter(Boolean).join(' · '), tone: 'green' };
+    case 'training.cancel': return { title: '取消训练任务', detail: actor, tone: 'orange' };
+    case 'training.delete': return { title: name ? `删除训练任务：${name}` : '删除训练任务及产物', detail: actor, tone: 'orange' };
+    case 'model.upload': return { title: filename ? `上传模型：${filename}` : '上传模型', detail: actor, tone: 'green' };
+    case 'model.stage.update': return { title: stage ? `模型阶段更新为${stage}` : '更新模型阶段', detail: actor, tone: 'green' };
+    case 'model.delete': return { title: name ? `删除模型：${name}` : '删除模型及产物', detail: [actor, version].filter(Boolean).join(' · '), tone: 'orange' };
+    case 'conversion.create': return { title: format ? `创建 ${format} 模型转换` : '创建模型转换', detail: actor, tone: 'green' };
+    case 'conversion.cancel': return { title: '取消模型转换', detail: actor, tone: 'orange' };
+    case 'conversion.delete': return { title: format ? `删除 ${format} 转换任务` : '删除转换任务及产物', detail: actor, tone: 'orange' };
+    case 'storage.gc': return { title: '清理无主磁盘产物', detail: actor, tone: 'orange' };
+    default: return { title: '更新工作空间资源', detail: actor, tone: 'blue' };
+  }
+}
+
+function formatActivityTime(createdAt: string) {
+  const timestamp = new Date(createdAt).getTime();
+  if (!Number.isFinite(timestamp)) return '--';
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (elapsedSeconds < 60) return '刚刚';
+  if (elapsedSeconds < 3600) return `${Math.floor(elapsedSeconds / 60)}分钟前`;
+  if (elapsedSeconds < 86400) return `${Math.floor(elapsedSeconds / 3600)}小时前`;
+  if (elapsedSeconds < 604800) return `${Math.floor(elapsedSeconds / 86400)}天前`;
+  return new Date(timestamp).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+}
 
 export function DashboardPage() {
-  const { datasets, jobs, models, gpuEnabled, cpuTrainingEnabled, cpuOnnxEnabled } = useApp();
+  const { datasets, jobs, models, activities, gpuEnabled, cpuTrainingEnabled, cpuOnnxEnabled } = useApp();
   const runningJobs = jobs.filter((job) => job.status === 'running').length;
   const queuedJobs = jobs.filter((job) => job.status === 'queued').length;
   const reviewDatasets = datasets.filter((dataset) => dataset.status === '待审核').length;
@@ -42,7 +96,10 @@ export function DashboardPage() {
 
         <section className="panel activity-panel">
           <header className="section-header"><div><h2>近期活动</h2><p>工作空间的重要变更</p></div></header>
-          <EmptyState icon={Boxes} title="暂无活动记录" description="数据、训练和模型操作将在这里汇总" />
+          {activities.length === 0 ? <EmptyState icon={Boxes} title="暂无活动记录" description="数据、训练和模型操作将在这里汇总" /> : <div className="activity-list">{activities.map((activity) => {
+            const presentation = describeActivity(activity);
+            return <article className="activity-item" key={activity.id}><time dateTime={activity.createdAt} title={new Date(activity.createdAt).toLocaleString('zh-CN')}>{formatActivityTime(activity.createdAt)}</time><i className={presentation.tone} aria-hidden="true" /><div><strong>{presentation.title}</strong><span>{presentation.detail}</span></div></article>;
+          })}</div>}
         </section>
       </div>
     </div>

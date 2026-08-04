@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, Box, Braces, Check, ChevronDown, Cpu, Download, FileCode2, Gauge, Info, PackageOpen, Plus, Search, Settings2, Square, Zap } from 'lucide-react';
+import { ArrowRight, Box, Braces, Check, ChevronDown, Cpu, Download, FileCode2, Gauge, Info, PackageOpen, Plus, Search, Settings2, Square, Trash2, Zap } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
-import { EmptyState, PageHeader, ProgressBar, StatusBadge } from '../components/ui';
+import { EmptyState, Modal, PageHeader, Pagination, ProgressBar, StatusBadge } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { formatDescriptions } from '../data/catalog';
 import type { ConversionFormat, ConversionTask } from '../types';
@@ -24,10 +24,17 @@ export function ConversionsPage() {
   const [optionB, setOptionB] = useState('dynamic');
   const [matrixOpen, setMatrixOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const { conversions, createConversion, cancelConversion, downloadArtifact, gpuEnabled, cpuConversionFormats, models, notify } = useApp();
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [deleteTarget, setDeleteTarget] = useState<ConversionTask | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { conversions, createConversion, cancelConversion, deleteConversion, downloadArtifact, gpuEnabled, cpuConversionFormats, models, session, notify } = useApp();
   const model = models.find((item) => item.id === sourceId);
   const target = formatDescriptions[format].target;
-  const visibleTasks = useMemo(() => conversions.filter((task) => `${task.modelName}${task.format}${task.target}`.toLowerCase().includes(query.toLowerCase())), [conversions, query]);
+  const filteredTasks = useMemo(() => conversions.filter((task) => `${task.modelName}${task.format}${task.target}`.toLowerCase().includes(query.toLowerCase())), [conversions, query]);
+  const currentPage = Math.min(page, Math.max(1, Math.ceil(filteredTasks.length / pageSize)));
+  const visibleTasks = useMemo(() => filteredTasks.slice((currentPage - 1) * pageSize, currentPage * pageSize), [currentPage, filteredTasks, pageSize]);
+  const canDelete = session?.user.role === 'admin' || session?.user.role === 'engineer';
   const sdxlBlocked = model?.task === 'sdxl' && !gpuEnabled;
   const conversionAllowed = !sdxlBlocked && (gpuEnabled || cpuConversionFormats.includes(format));
 
@@ -63,6 +70,19 @@ export function ConversionsPage() {
     try { await downloadArtifact(artifactId); } catch (error) { notify('转换产物下载失败', error instanceof Error ? error.message : '无法读取转换产物', 'error'); }
   };
   const downloadTask = (task: ConversionTask) => task.artifactId ? download(task.artifactId) : Promise.resolve();
+
+  const remove = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await deleteConversion(deleteTarget.id);
+      setDeleteTarget(null);
+    } catch (error) {
+      notify('转换任务未删除', error instanceof Error ? error.message : '无法删除转换任务及产物', 'error');
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <div className="page conversions-page">
@@ -109,14 +129,16 @@ export function ConversionsPage() {
       </section>
 
       <section className="conversion-tasks-section">
-        <header className="section-header"><div><span className="section-number">02</span><div><h2>转换任务</h2><p>近期构建记录与部署产物。</p></div></div><div className="toolbar-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索转换任务" /></div></header>
+        <header className="section-header"><div><span className="section-number">02</span><div><h2>转换任务</h2><p>近期构建记录与部署产物。</p></div></div><div className="toolbar-search"><Search size={16} /><input value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder="搜索转换任务" /></div></header>
         {visibleTasks.length ? <div className="table-panel">
-          <div className="table-scroll"><table className="data-table conversion-table"><thead><tr><th>源模型</th><th>目标格式</th><th>精度 / 环境</th><th>状态</th><th>产物大小</th><th>创建时间</th><th aria-label="操作" /></tr></thead><tbody>{visibleTasks.map((task) => <tr key={task.id}><td><div className="conversion-model-cell"><span className="format-mini"><Braces size={16} /></span><div><strong>{task.modelName}</strong><span>{task.modelVersion}</span></div></div></td><td><strong>{task.format}</strong></td><td><span>{task.precision}</span><span className="cell-subtext">{task.target}</span></td><td><div className="status-progress"><StatusBadge status={task.status} />{task.status === 'running' && <ProgressBar value={task.progress} />}{task.errorMessage && <span className="failure-reason">{task.errorMessage}</span>}</div></td><td>{task.size}</td><td>{task.createdAt}</td><td><div className="row-actions">{task.status === 'completed' && task.artifactId && <button className="icon-button bordered" title="下载产物" aria-label="下载产物" onClick={() => void downloadTask(task)}><Download size={16} /></button>}{(task.status === 'queued' || task.status === 'running') && <button className="icon-button" title="取消转换" aria-label="取消转换" onClick={() => void cancel(task.id)}><Square size={16} /></button>}</div></td></tr>)}</tbody></table></div>
+          <div className="table-scroll"><table className="data-table conversion-table"><thead><tr><th>源模型</th><th>目标格式</th><th>精度 / 环境</th><th>状态</th><th>产物大小</th><th>创建时间</th><th aria-label="操作" /></tr></thead><tbody>{visibleTasks.map((task) => <tr key={task.id}><td><div className="conversion-model-cell"><span className="format-mini"><Braces size={16} /></span><div><strong>{task.modelName}</strong><span>{task.modelVersion}</span></div></div></td><td><strong>{task.format}</strong></td><td><span>{task.precision}</span><span className="cell-subtext">{task.target}</span></td><td><div className="status-progress"><StatusBadge status={task.status} />{task.status === 'running' && <ProgressBar value={task.progress} />}{task.errorMessage && <span className="failure-reason">{task.errorMessage}</span>}</div></td><td>{task.size}</td><td>{task.createdAt}</td><td><div className="row-actions">{task.status === 'completed' && task.artifactId && <button className="icon-button bordered" title="下载产物" aria-label={`下载 ${task.modelName} ${task.format} 产物`} onClick={() => void downloadTask(task)}><Download size={16} /></button>}{(task.status === 'queued' || task.status === 'running') && <button className="icon-button" title="取消转换" aria-label={`取消 ${task.modelName} ${task.format} 转换`} onClick={() => void cancel(task.id)}><Square size={16} /></button>}{canDelete && !['queued', 'running'].includes(task.status) && <button className="icon-button" title="删除转换任务及产物" aria-label={`删除 ${task.modelName} ${task.format} 转换`} onClick={() => setDeleteTarget(task)}><Trash2 size={17} /></button>}</div></td></tr>)}</tbody></table></div>
+          <Pagination page={currentPage} pageSize={pageSize} totalItems={filteredTasks.length} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} />
         </div> : <EmptyState icon={PackageOpen} title={conversions.length ? '没有匹配的转换任务' : '暂无转换任务'} description={conversions.length ? '调整搜索条件后重试。' : '选择已登记模型并提交转换任务后，构建记录将在此显示。'} />}
       </section>
 
       <div className="format-compatibility-band"><Info size={18} /><span><strong>格式选择建议</strong> NVIDIA 边缘设备优先 TensorRT，Intel 产线工控机使用 OpenVINO，跨平台服务使用 ONNX。</span><button className="text-link" onClick={() => setMatrixOpen((value) => !value)}>查看部署矩阵 <ChevronDown size={14} /></button></div>
       {matrixOpen && <section className="deployment-matrix"><div><strong>ONNX</strong><span>通用 CPU / GPU</span><small>FP32 / FP16</small></div><div><strong>TensorRT</strong><span>NVIDIA T4 / GPU</span><small>FP32 / FP16</small></div><div><strong>TorchScript</strong><span>PyTorch Runtime</span><small>FP32 / FP16</small></div><div><strong>OpenVINO</strong><span>Intel CPU / GPU / NPU</span><small>FP32 / FP16</small></div></section>}
+      {deleteTarget && <Modal title="删除转换任务及产物" description={`确认删除“${deleteTarget.modelName} ${deleteTarget.format}”？`} onClose={() => !deleting && setDeleteTarget(null)} footer={<><button className="button secondary" disabled={deleting} onClick={() => setDeleteTarget(null)}>取消</button><button className="button danger" disabled={deleting} onClick={() => void remove()}>{deleting ? '正在删除' : '确认删除'}</button></>}><p className="modal-warning-copy">转换记录和部署产物将从本地制品存储永久删除，无法恢复。</p></Modal>}
     </div>
   );
 }

@@ -18,6 +18,7 @@ const defaultDraft: TrainingDraft = {
   type: 'detection',
   dataFormat: 'YOLO',
   name: '',
+  version: 'v1',
   datasetId: '',
   model: 'yolov8m',
   weightSource: 'pretrained',
@@ -63,8 +64,8 @@ export function TrainingWizardPage() {
       notify('训练任务未创建', draft.type === 'sdxl' ? 'SDXL 训练需要 CUDA GPU Worker。' : '当前部署未启用可用的训练 Worker。', 'error');
       return;
     }
-    if (!draft.name.trim() || !selectedDataset) {
-      notify('训练任务未创建', '请填写任务名称并选择兼容的数据集。', 'error');
+    if (!draft.name.trim() || !draft.version.trim() || !selectedDataset) {
+      notify('训练任务未创建', '请填写任务名称、模型版本并选择兼容的数据集。', 'error');
       return;
     }
     setSubmitting(true);
@@ -114,6 +115,7 @@ export function TrainingWizardPage() {
             <div className="wizard-form-layout">
               <div className="form-stack">
                 <label className="form-field"><span>任务名称</span><input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
+                <label className="form-field"><span>模型版本</span><input value={draft.version} maxLength={40} placeholder="例如：v1.0.0" onChange={(event) => setDraft((current) => ({ ...current, version: event.target.value }))} /><small>训练成功后将以该版本登记到模型仓库</small></label>
                 <label className="form-field"><span>数据集版本</span><select value={selectedDataset?.id ?? ''} disabled={!compatibleDatasets.length} onChange={(event) => setDraft((current) => ({ ...current, datasetId: event.target.value }))}><option value="">{compatibleDatasets.length ? '请选择数据集' : '暂无已审核数据集'}</option>{compatibleDatasets.map((dataset) => <option value={dataset.id} key={dataset.id}>{dataset.name} · {dataset.version}</option>)}</select></label>
                 <label className="form-field"><span>数据格式</span><select value={draft.dataFormat} disabled={draft.type === 'sdxl'} onChange={(event) => setDraft((current) => ({ ...current, dataFormat: event.target.value as TrainingDataFormat }))}>{compatibleFormats.map((format) => <option key={format} value={format}>{dataFormatDescriptions[format].label}</option>)}</select><small>{dataFormatDescriptions[draft.dataFormat].description}</small></label>
                 <label className="form-field"><span>基础模型</span><select value={draft.model} onChange={(event) => setDraft((current) => ({ ...current, model: event.target.value }))}>{currentTask.models.map((model) => <option key={model.value} value={model.value}>{model.label}</option>)}</select></label>
@@ -160,9 +162,9 @@ export function TrainingWizardPage() {
         {step === 4 && (
           <div className="wizard-step-content review-step">
             <header className="wizard-section-heading"><span>04</span><div><h2>确认并启动</h2><p>检查任务配置，提交后将进入{gpuEnabled ? ' GPU' : ' CPU'}资源队列。</p></div></header>
-            <div className="review-banner"><span className={`choice-icon ${currentTask.color}`}><currentTask.icon size={23} /></span><div><strong>{draft.name}</strong><span>{taskLabels[draft.type]} · {draft.model}</span></div><span className="neutral-badge">配置完整</span></div>
+            <div className="review-banner"><span className={`choice-icon ${currentTask.color}`}><currentTask.icon size={23} /></span><div><strong>{draft.name}</strong><span>{taskLabels[draft.type]} · {draft.model} · {draft.version}</span></div><span className="neutral-badge">配置完整</span></div>
             <div className="review-grid">
-              <section><header><Database size={17} />数据与模型</header><dl><div><dt>数据版本</dt><dd>{selectedDataset ? `${selectedDataset.name} ${selectedDataset.version}` : '--'}</dd></div><div><dt>数据格式</dt><dd>{dataFormatDescriptions[draft.dataFormat].label}</dd></div><div><dt>基础模型</dt><dd>{draft.model}</dd></div><div><dt>权重来源</dt><dd>{draft.weightSource === 'scratch' ? '从头训练' : '官方预训练权重'}</dd></div><div><dt>输入尺寸</dt><dd>{draft.imageSize} × {draft.imageSize}</dd></div></dl></section>
+              <section><header><Database size={17} />数据与模型</header><dl><div><dt>模型版本</dt><dd>{draft.version}</dd></div><div><dt>数据版本</dt><dd>{selectedDataset ? `${selectedDataset.name} ${selectedDataset.version}` : '--'}</dd></div><div><dt>数据格式</dt><dd>{dataFormatDescriptions[draft.dataFormat].label}</dd></div><div><dt>基础模型</dt><dd>{draft.model}</dd></div><div><dt>权重来源</dt><dd>{draft.weightSource === 'scratch' ? '从头训练' : '官方预训练权重'}</dd></div><div><dt>输入尺寸</dt><dd>{draft.imageSize} × {draft.imageSize}</dd></div></dl></section>
               <section><header><SlidersHorizontal size={17} />训练参数</header><dl><div><dt>训练轮次</dt><dd>{draft.epochs}</dd></div><div><dt>Batch / 学习率</dt><dd>{draft.batchSize} / {draft.learningRate}</dd></div><div><dt>混合精度</dt><dd>{draft.mixedPrecision ? '开启' : '关闭'}</dd></div></dl></section>
               <section><header><Cpu size={17} />计算资源</header><dl><div><dt>设备</dt><dd>{draft.gpu}</dd></div><div><dt>资源状态</dt><dd>提交后排队</dd></div></dl></section>
             </div>
@@ -172,7 +174,7 @@ export function TrainingWizardPage() {
 
         <footer className="wizard-footer">
           <span>步骤 {step} / 4</span>
-          <div>{step > 1 && <button className="button secondary" onClick={() => setStep((current) => current - 1)}><ArrowLeft size={16} />上一步</button>}{step < 4 ? <button className="button primary" onClick={() => setStep((current) => current + 1)} disabled={(step === 2 && (!draft.name.trim() || !selectedDataset)) || !taskTrainingAvailable}>下一步 <ArrowRight size={16} /></button> : <button className="button primary launch-button" onClick={submit} disabled={!taskTrainingAvailable || submitting || !selectedDataset || !draft.name.trim()}><Sparkles size={17} />{submitting ? '正在提交' : taskTrainingAvailable ? '创建并启动' : draft.type === 'sdxl' ? 'SDXL 需要 GPU' : '训练 Worker 未启用'}</button>}</div>
+          <div>{step > 1 && <button className="button secondary" onClick={() => setStep((current) => current - 1)}><ArrowLeft size={16} />上一步</button>}{step < 4 ? <button className="button primary" onClick={() => setStep((current) => current + 1)} disabled={(step === 2 && (!draft.name.trim() || !draft.version.trim() || !selectedDataset)) || !taskTrainingAvailable}>下一步 <ArrowRight size={16} /></button> : <button className="button primary launch-button" onClick={submit} disabled={!taskTrainingAvailable || submitting || !selectedDataset || !draft.name.trim() || !draft.version.trim()}><Sparkles size={17} />{submitting ? '正在提交' : taskTrainingAvailable ? '创建并启动' : draft.type === 'sdxl' ? 'SDXL 需要 GPU' : '训练 Worker 未启用'}</button>}</div>
         </footer>
       </section>
     </div>

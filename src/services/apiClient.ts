@@ -1,4 +1,4 @@
-import type { AnnotationDocument, AnnotationImageAttributes, AnnotationRecord, AnnotationReviewDecisionInput, AnnotationReviewSummary, ApiErrorEnvelope, Artifact, AuthUser, ConversionTask, Dataset, DatasetImage, ExportTask, ImageCaption, LoginResponse, ModelVersion, RuntimeCapabilities, TrainingDraft, TrainingEvent, TrainingJob, TrainingObservability } from '../../shared/contracts';
+import type { AnnotationDocument, AnnotationImageAttributes, AnnotationRecord, AnnotationReviewDecisionInput, AnnotationReviewSummary, ApiErrorEnvelope, Artifact, AuthUser, ConversionTask, Dataset, DatasetImage, ExportTask, ImageCaption, LoginResponse, ModelVersion, ResourceDeletionResult, RuntimeCapabilities, TrainingDraft, TrainingEvent, TrainingJob, TrainingObservability, WorkspaceActivity } from '../../shared/contracts';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? '/api/v1';
 export const apiEnabled = import.meta.env.VITE_API_ENABLED === 'true';
@@ -51,10 +51,11 @@ export class ApiClient {
   login(username: string, password: string) { return this.request<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }); }
   me() { return this.request<AuthUser>('/auth/me'); }
   capabilities() { return this.request<RuntimeCapabilities>('/capabilities'); }
+  activities() { return this.request<{ items: WorkspaceActivity[] }>('/activities'); }
   datasets() { return this.request<{ items: Dataset[] }>('/datasets'); }
   createDataset(input: { name: string; description: string; version: string; classes: string[] }) { return this.request<Dataset>('/datasets', { method: 'POST', body: JSON.stringify(input) }); }
   updateDatasetClasses(datasetId: string, classes: string[]) { return this.request<Dataset>(`/datasets/${datasetId}/classes`, { method: 'PATCH', body: JSON.stringify({ classes }) }); }
-  deleteDataset(datasetId: string) { return this.request<void>(`/datasets/${datasetId}`, { method: 'DELETE' }); }
+  deleteDataset(datasetId: string) { return this.request<ResourceDeletionResult>(`/datasets/${datasetId}`, { method: 'DELETE' }); }
   datasetImages(datasetId: string) { return this.request<{ items: DatasetImage[] }>(`/datasets/${datasetId}/images`); }
   async uploadDatasetImage(datasetId: string, file: File, split: DatasetImage['split'] = 'train') {
     const headers = new Headers({
@@ -86,12 +87,13 @@ export class ApiClient {
   createTrainingJob(draft: TrainingDraft) { return this.request<TrainingJob>('/training/jobs', { method: 'POST', body: JSON.stringify(draft) }); }
   retryTrainingJob(jobId: string) { return this.request<TrainingJob>(`/training/jobs/${jobId}/retry`, { method: 'POST' }); }
   cancelTrainingJob(jobId: string) { return this.request<TrainingJob>(`/training/jobs/${jobId}/cancel`, { method: 'POST' }); }
-  deleteTrainingJob(jobId: string) { return this.request<void>(`/training/jobs/${jobId}`, { method: 'DELETE' }); }
+  deleteTrainingJob(jobId: string) { return this.request<ResourceDeletionResult>(`/training/jobs/${jobId}`, { method: 'DELETE' }); }
   trainingEvents(jobId: string) { return this.request<{ items: TrainingEvent[] }>(`/training/jobs/${jobId}/events`); }
   trainingObservability(jobId: string) { return this.request<TrainingObservability>(`/training/jobs/${jobId}/observability`); }
   conversions() { return this.request<{ items: ConversionTask[] }>('/conversions'); }
   createConversion(input: { modelName: string; modelVersion: string; format: ConversionTask['format']; precision: string; target: string; options: Record<string, string | boolean> }) { return this.request<ConversionTask>('/conversions', { method: 'POST', body: JSON.stringify(input) }); }
   cancelConversion(conversionId: string) { return this.request<ConversionTask>(`/conversions/${conversionId}/cancel`, { method: 'POST' }); }
+  deleteConversion(conversionId: string) { return this.request<ResourceDeletionResult>(`/conversions/${conversionId}`, { method: 'DELETE' }); }
   downloadArtifact(artifactId: string) { return this.requestBlob(`/artifacts/${artifactId}/download`); }
   models() { return this.request<{ items: ModelVersion[] }>('/models'); }
   async uploadModel(input: { name: string; version: string; task: ModelVersion['task']; framework: string; stage: ModelVersion['stage']; file: File }) {
@@ -115,4 +117,5 @@ export class ApiClient {
     return response.json() as Promise<ModelVersion>;
   }
   updateModelStage(modelId: string, stage: ModelVersion['stage']) { return this.request<ModelVersion>(`/models/${modelId}/stage`, { method: 'PATCH', body: JSON.stringify({ stage }) }); }
+  deleteModel(modelId: string) { return this.request<ResourceDeletionResult>(`/models/${modelId}`, { method: 'DELETE' }); }
 }

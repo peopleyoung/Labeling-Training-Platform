@@ -55,6 +55,7 @@ Playwright 会自动启动开发服务器。
 ## 当前运行时边界
 
 - API、数据集、图像、标注 revision、训练事件、训练/转换/导出任务、模型上传和产物元数据由 PostgreSQL 持久化；Redis 只负责 BullMQ 调度。
+- 删除数据集、终态训练任务、模型或终态转换任务时会级联删除其本地受管产物并返回释放空间；历史孤立目录可通过 `npm run artifacts:cleanup` dry-run 后使用 `-- --execute` 清理。部署管理的 `/data/model-cache` 预训练缓存不参与业务删除。
 - 标注支持数据集级统一提交、图像级审核。提交后的图像在审核完成前锁定；管理员/工程师可逐张或批量通过/驳回，驳回必须填写原因。只有全部图像审核通过的数据集才允许训练与正式导出。
 - 导出由默认 `export-worker` 消费；CPU YOLO 训练和 FP32 ONNX/TorchScript/OpenVINO 转换由默认 `cpu-worker` 消费；GPU 训练与 TensorRT 转换由可选 GPU Worker 消费。API 按能力将任务路由到独立队列。Worker 产物与预训练权重缓存保存在共享 `/data` 卷，API 通过受鉴权下载路由提供文件；MinIO 容器已包含在开发部署中，但当前产物路径尚未上传到 S3。
 - 新建数据集不绑定任务类型。训练时先选择目标检测、语义分割、关键点或 SDXL，再选择该任务兼容的数据格式；选择值会持久化并控制 Worker 的实际数据物化和加载路径。

@@ -59,6 +59,16 @@ export interface AuthUser {
   mustChangePassword: boolean;
 }
 
+export interface WorkspaceActivity {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId?: string;
+  metadata: Record<string, unknown>;
+  actor: Pick<AuthUser, 'id' | 'displayName'> | null;
+  createdAt: string;
+}
+
 export interface LoginResponse {
   accessToken: string;
   user: AuthUser;
@@ -183,6 +193,7 @@ export interface TrainingDraft {
   type: TrainingType;
   dataFormat: TrainingDataFormat;
   name: string;
+  version: string;
   datasetId: string;
   model: string;
   weightSource: 'pretrained' | 'scratch';
@@ -308,6 +319,15 @@ export interface Artifact {
   sourceType: string;
   sourceId: string;
   createdAt: string;
+}
+
+export interface ResourceDeletionResult {
+  releasedBytes: number;
+  removedFiles: number;
+  removedDirectories: number;
+  removedModels: number;
+  removedConversions: number;
+  removedExports: number;
 }
 
 export interface PaginatedResponse<T> {

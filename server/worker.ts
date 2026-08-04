@@ -375,7 +375,7 @@ async function handleTraining(taskId: string) {
   await appendTrainingEvent(taskId, job.workspace_id, 'info', `训练产物已登记：${path.basename(artifactFile)}`);
   await pool.query(
     "INSERT INTO model_versions(id, workspace_id, name, version, task, source_job, metric_name, metric_value, framework, size, formats, stage, artifact_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (id) DO NOTHING",
-    [`model-${taskId}`, job.workspace_id, job.name, taskId, job.type, taskId, job.type === 'segmentation' ? 'mIoU' : job.type === 'keypoint' ? 'OKS' : job.type === 'sdxl' ? 'Loss' : 'mAP@50', metric === null ? '--' : metric.value.toFixed(4), frameworkFor(job.model), formatBytes(artifact.sizeBytes), JSON.stringify([]), '评估中', artifact.id],
+    [`model-${taskId}`, job.workspace_id, job.name, String(job.config.version ?? taskId), job.type, taskId, job.type === 'segmentation' ? 'mIoU' : job.type === 'keypoint' ? 'OKS' : job.type === 'sdxl' ? 'Loss' : 'mAP@50', metric === null ? '--' : metric.value.toFixed(4), frameworkFor(job.model), formatBytes(artifact.sizeBytes), JSON.stringify([]), '评估中', artifact.id],
   );
   const completed = await pool.query("UPDATE training_jobs SET status = 'completed', progress = 100, epoch = $3, metric_value = $4, eta = '已完成', artifact_id = $2, updated_at = NOW() WHERE id = $1 AND status = 'running' RETURNING id", [taskId, artifact.id, `${metric?.epochs ?? job.config.epochs} / ${job.config.epochs}`, metric === null ? '--' : metric.value.toFixed(4)]);
   if (completed.rowCount) await appendTrainingEvent(taskId, job.workspace_id, 'info', '训练任务已完成');

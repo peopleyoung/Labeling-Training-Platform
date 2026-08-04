@@ -16,7 +16,8 @@
     "test:e2e": "playwright test",
     "test:server": "vitest run server",
     "db:migrate": "tsx server/migrate.ts",
-    "db:seed": "tsx server/seedDatabase.ts"
+    "db:seed": "tsx server/seedDatabase.ts",
+    "artifacts:cleanup": "tsx server/cleanupArtifacts.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1093.0",
