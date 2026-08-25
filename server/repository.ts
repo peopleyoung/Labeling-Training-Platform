@@ -551,6 +551,10 @@ function mapModel(row: Record<string, unknown>): ModelVersion {
     formats: row.formats as ModelVersion['formats'],
     stage: row.stage as ModelVersion['stage'],
     artifactId: row.artifact_id ? String(row.artifact_id) : undefined,
+    architectureVariant: (row.architecture_variant as ModelVersion['architectureVariant']) ?? undefined,
+    targetFamily: row.target_family ? String(row.target_family) as ModelVersion['targetFamily'] : undefined,
+    rkCompatibilityStatus: row.rk_compatibility_status ? String(row.rk_compatibility_status) as ModelVersion['rkCompatibilityStatus'] : undefined,
+    outputProtocol: row.output_protocol ? String(row.output_protocol) as ModelVersion['outputProtocol'] : undefined,
   };
 }
 

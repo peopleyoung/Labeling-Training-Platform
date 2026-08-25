@@ -96,6 +96,8 @@ def run_with_telemetry(command: TrainingCommand, device: str) -> int:
 VARIANT_FAMILIES = {
     "yolov5": "detection",
     "yolov8": "detection",
+    "yolov8-seg": "instance_segmentation",
+    "yolov8-pose": "keypoint",
     "segformer": "segmentation",
     "unet": "segmentation",
     "deeplabv3plus": "segmentation",
@@ -107,12 +109,17 @@ VARIANT_FAMILIES = {
 TASK_DATA_FORMATS = {
     "detection": {"YOLO", "COCO", "VOC"},
     "segmentation": {"COCO_SEGMENTATION", "PNG_MASK"},
+    "instance_segmentation": {"YOLO_SEG"},
     "keypoint": {"COCO_KEYPOINTS"},
     "sdxl": {"IMAGE_FOLDER"},
 }
 
 
 def model_family(model: str) -> str:
+    if model.startswith("yolov8") and model.endswith("-seg"):
+        return "yolov8-seg"
+    if model.startswith("yolov8") and model.endswith("-pose"):
+        return "yolov8-pose"
     if model.startswith("yolov5"):
         return "yolov5"
     if model.startswith("yolov8"):
@@ -151,6 +158,13 @@ def validate_training_config(config: Dict[str, Any], device: str = "gpu") -> Non
         raise ConfigurationError("T4 product profile limits input size to 1024")
     if config.get("weightSource", "pretrained") not in {"pretrained", "scratch"}:
         raise ConfigurationError("weightSource must be pretrained or scratch")
+    architecture_variant = config.get("architectureVariant", "standard")
+    if architecture_variant not in {"standard", "rk_compatible"}:
+        raise ConfigurationError("architectureVariant must be standard or rk_compatible")
+    if str(config["model"]).endswith("-rk") and architecture_variant != "rk_compatible":
+        raise ConfigurationError("The RK-friendly DeepLabV3+ variant requires architectureVariant=rk_compatible")
+    if architecture_variant == "rk_compatible" and family not in {"yolov5", "yolov8", "yolov8-seg", "yolov8-pose", "deeplabv3plus"}:
+        raise ConfigurationError("This model family has no reviewed Rockchip-compatible structure")
 
 
 def build_training_command(config: Dict[str, Any], dataset_config: str, output_dir: str) -> TrainingCommand:
@@ -170,7 +184,7 @@ def build_training_command(config: Dict[str, Any], dataset_config: str, output_d
     batch_size = str(config["batchSize"])
     image_size = str(config["imageSize"])
 
-    if family in {"yolov5", "yolov8"}:
+    if family in {"yolov5", "yolov8", "yolov8-seg", "yolov8-pose"}:
         gpu_count = 2 if str(config.get("gpu", "")).startswith("2") else 1
         selected_device = "cpu" if device == "cpu" else ",".join(str(index) for index in range(gpu_count))
         learning_rate = str(config.get("learningRate", "0.01"))
@@ -180,7 +194,7 @@ def build_training_command(config: Dict[str, Any], dataset_config: str, output_d
         extension = "yaml" if from_scratch else "pt"
         weights = f"{config['model']}{suffix}.{extension}"
         command = [
-            "yolo", "detect", "train", f"model={weights}", f"data={dataset_config}",
+            "yolo", "segment" if family == "yolov8-seg" else "pose" if family == "yolov8-pose" else "detect", "train", f"model={weights}", f"data={dataset_config}",
             f"epochs={epochs}", f"batch={batch_size}", f"imgsz={image_size}",
             f"project={output_dir}", "name=run", "exist_ok=True", f"device={selected_device}",
             f"lr0={learning_rate}", f"patience={patience}", f"amp={'True' if device == 'gpu' and config.get('mixedPrecision') else 'False'}",
@@ -190,7 +204,7 @@ def build_training_command(config: Dict[str, Any], dataset_config: str, output_d
 
     if family in {"segformer", "unet", "deeplabv3plus", "hrnet", "higherhrnet"}:
         module = "forge_worker.train_segmentation" if family in {"segformer", "unet", "deeplabv3plus"} else "forge_worker.train_keypoint"
-        command = ["python3", "-m", module, "--model", str(config["model"]), "--data", dataset_config, "--epochs", epochs, "--batch-size", batch_size, "--image-size", image_size, "--output-dir", output_dir, "--learning-rate", str(config.get("learningRate", "0.001")), "--weight-source", str(config.get("weightSource", "pretrained")), "--device", device]
+        command = ["python3", "-m", module, "--model", str(config["model"]), "--data", dataset_config, "--epochs", epochs, "--batch-size", batch_size, "--image-size", image_size, "--output-dir", output_dir, "--learning-rate", str(config.get("learningRate", "0.001")), "--weight-source", str(config.get("weightSource", "pretrained")), "--architecture-variant", str(config.get("architectureVariant", "standard")), "--device", device]
         if device == "gpu" and config.get("mixedPrecision"):
             command.append("--fp16")
         return TrainingCommand(command, common_env, model_cache)
@@ -205,20 +219,34 @@ def build_conversion_command(config: Dict[str, Any], source_path: str, output_di
     precision = config["precision"]
     target = config["target"]
     common = ["python3", "-m", "forge_worker.convert"]
-    family_args = ["--model-family", str(config.get("modelFamily", "unknown")), "--device", os.environ.get("FORGE_EXECUTION_DEVICE", "gpu")]
+    architecture_variant = str(config.get("architectureVariant", "standard"))
+    input_shape = str(config.get("inputShape", "1,3,640,640"))
+    if architecture_variant == "rk_compatible":
+        try:
+            dimensions = tuple(int(value.strip()) for value in input_shape.split(","))
+        except ValueError as error:
+            raise ConfigurationError("RK 友好 ONNX 输入尺寸必须是 N,C,H,W") from error
+        if len(dimensions) != 4 or dimensions[0] != 1:
+            raise ConfigurationError("RK 友好 ONNX 仅支持静态 batch 1")
+        if format_name == "ONNX" and config.get("optionB") == "dynamic":
+            raise ConfigurationError("RK 友好 ONNX 不支持动态 batch")
+    family_args = ["--model-family", str(config.get("modelFamily", "unknown")), "--architecture-variant", architecture_variant, "--device", os.environ.get("FORGE_EXECUTION_DEVICE", "gpu")]
     if format_name == "ONNX":
-        command = [*common, "onnx", "--source", source_path, "--output-dir", output_dir, "--precision", precision, "--opset", str(config.get("optionA", "18")), "--input-shape", str(config.get("inputShape", "1,3,640,640")), *family_args]
+        requested_opset = int(config.get("optionA", "13" if architecture_variant == "rk_compatible" else "18"))
+        if architecture_variant == "rk_compatible" and requested_opset not in {12, 13}:
+            raise ConfigurationError("RK 友好 ONNX 仅支持 Opset 12 或 13")
+        command = [*common, "onnx", "--source", source_path, "--output-dir", output_dir, "--precision", precision, "--opset", str(requested_opset), "--input-shape", input_shape, *family_args]
         if config.get("optionB") == "dynamic":
             command.append("--dynamic-batch")
         return TrainingCommand(command, {"PYTHONUNBUFFERED": "1"})
     if format_name == "TensorRT":
         if target not in {"NVIDIA T4", "NVIDIA GPU"}:
             raise ConfigurationError("TensorRT requires an NVIDIA target")
-        return TrainingCommand([*common, "tensorrt", "--source", source_path, "--output-dir", output_dir, "--precision", precision, "--gpu", target, "--input-shape", str(config.get("inputShape", "1,3,640,640")), *family_args], {"PYTHONUNBUFFERED": "1"})
+        return TrainingCommand([*common, "tensorrt", "--source", source_path, "--output-dir", output_dir, "--precision", precision, "--gpu", target, "--input-shape", input_shape, *family_args], {"PYTHONUNBUFFERED": "1"})
     if format_name == "TorchScript":
-        return TrainingCommand([*common, "torchscript", "--source", source_path, "--output-dir", output_dir, "--precision", precision, "--input-shape", str(config.get("inputShape", "1,3,640,640")), *family_args], {"PYTHONUNBUFFERED": "1"})
+        return TrainingCommand([*common, "torchscript", "--source", source_path, "--output-dir", output_dir, "--precision", precision, "--input-shape", input_shape, *family_args], {"PYTHONUNBUFFERED": "1"})
     if format_name == "OpenVINO":
-        return TrainingCommand([*common, "openvino", "--source", source_path, "--output-dir", output_dir, "--precision", precision, "--target", target, "--input-shape", str(config.get("inputShape", "1,3,640,640")), *family_args], {"PYTHONUNBUFFERED": "1"})
+        return TrainingCommand([*common, "openvino", "--source", source_path, "--output-dir", output_dir, "--precision", precision, "--target", target, "--input-shape", input_shape, *family_args], {"PYTHONUNBUFFERED": "1"})
     raise ConfigurationError(f"Unsupported conversion format: {format_name}")
 
 

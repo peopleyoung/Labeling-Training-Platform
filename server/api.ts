@@ -8,7 +8,7 @@ import jwt from '@fastify/jwt';
 import bcrypt from 'bcryptjs';
 import { ZodError, type ZodType } from 'zod';
 import type { AuthUser, ConversionTask, ResourceDeletionResult, RuntimeCapabilities, TrainingDraft, UserRole } from '../shared/contracts';
-import { conversionCatalog, findModelVariant, modelCatalog } from '../shared/modelCatalog';
+import { conversionCatalog, findModelVariant, modelCatalog, modelVariantArchitecture } from '../shared/modelCatalog';
 import { annotationReviewDecisionSchema, annotationSaveSchema, conversionRequestSchema, datasetClassesSchema, datasetCreateSchema, exportRequestSchema, loginSchema, modelStageSchema, modelUploadMetadataSchema, trainingDraftSchema } from '../shared/schemas';
 import type { ServerConfig } from './config';
 import { HttpError, RepositoryConflictError, RepositoryStateError, isHttpError } from './errors';
@@ -140,6 +140,9 @@ export async function buildApi({ config, repository, queue }: ApiDependencies): 
     if (!config.gpuEnabled && !config.cpuTrainingEnabled) throw new HttpError(503, 'TRAINING_WORKER_UNAVAILABLE', '当前部署未启用可用的训练 Worker');
     const model = findModelVariant(draft.model);
     if (!model || model.task !== draft.type) throw new HttpError(400, 'UNSUPPORTED_MODEL', '所选模型不支持当前训练任务');
+    const catalogArchitecture = modelVariantArchitecture(draft.model);
+    if (draft.model.endsWith('-rk') && draft.architectureVariant !== 'rk_compatible') throw new HttpError(400, 'RK_VARIANT_REQUIRED', 'RK 友好模型必须选择 RK 友好结构');
+    if (draft.architectureVariant === 'rk_compatible' && catalogArchitecture !== 'rk_compatible') throw new HttpError(400, 'RK_VARIANT_UNAVAILABLE', '所选模型尚未完成 RK 友好结构适配');
     if (draft.type === 'sdxl' && !config.gpuEnabled) throw new HttpError(503, 'SDXL_GPU_REQUIRED', 'SDXL 训练需要已启用 CUDA 的 GPU Worker');
     if (draft.type === 'sdxl' && draft.weightSource !== 'pretrained') throw new HttpError(400, 'SDXL_BASE_MODEL_REQUIRED', 'SDXL LoRA 训练必须使用预置的 SDXL Base 模型');
     if (await repository.getModelByNameVersion(draft.name, draft.version)) throw new HttpError(409, 'MODEL_VERSION_EXISTS', '同名模型版本已存在，请修改任务名称或模型版本');

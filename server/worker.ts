@@ -8,6 +8,7 @@ import { Pool } from 'pg';
 import { artifactObjectKey, artifactTaskDirectory, type WorkerArtifactCategory } from './artifacts';
 import { loadConfig } from './config';
 import { createDatasetExport } from './datasetExport';
+import { modelVariantArchitecture, modelVariantOutputProtocol, modelVariantRkStatus } from '../shared/modelCatalog';
 import { prepareTrainingFormat } from './trainingFormats';
 import { metricsFromRunnerEvent, parseRunnerEvent, parseYoloResultsCsv, type RunnerEvent, type TrainingMetricInput } from './trainingObservability';
 
@@ -175,10 +176,11 @@ async function readTrainingMetric(outputDir: string) {
   return Number.isFinite(value) ? { value, epochs: Number.isInteger(epochs) && epochs > 0 ? epochs : 0 } : null;
 }
 
-function primaryMetric(type: string, metrics: Record<string, number>) {
+function primaryMetric(type: string, metrics: Record<string, number>, model?: string) {
   if (type === 'detection') return metrics.mAP50;
+  if (type === 'instance_segmentation') return metrics.mAP50;
   if (type === 'segmentation') return metrics.mIoU;
-  if (type === 'keypoint') return metrics.oks;
+  if (type === 'keypoint') return model?.includes('-pose') ? (metrics.mAP50 ?? metrics.oks) : metrics.oks;
   if (type === 'sdxl') return metrics.loss;
   return undefined;
 }
@@ -187,6 +189,7 @@ async function persistTrainingMetric(input: {
   jobId: string;
   workspaceId: string;
   type: string;
+  model?: string;
   totalEpochs: number;
   point: TrainingMetricInput;
   progress: number;
@@ -200,13 +203,13 @@ async function persistTrainingMetric(input: {
      SET progress = EXCLUDED.progress, metrics = EXCLUDED.metrics, updated_at = NOW()`,
     [input.workspaceId, input.jobId, input.point.epoch, progress, JSON.stringify(input.point.metrics)],
   );
-  const metric = primaryMetric(input.type, input.point.metrics);
+  const metric = primaryMetric(input.type, input.point.metrics, input.model);
   await pool.query(
     "UPDATE training_jobs SET progress = GREATEST(progress, $2), epoch = $3, metric_value = COALESCE($4, metric_value), eta = $5, updated_at = NOW() WHERE id = $1 AND status = 'running'",
     [input.jobId, progress, `${input.point.epoch} / ${input.totalEpochs}`, metric === undefined ? null : metric.toFixed(4), `Epoch ${input.point.epoch} / ${input.totalEpochs}`],
   );
   if (input.announce) {
-    const metricText = metric === undefined ? `loss=${input.point.metrics.loss?.toFixed(4) ?? '--'}` : `${input.type === 'detection' ? 'mAP@50' : input.type === 'segmentation' ? 'mIoU' : input.type === 'keypoint' ? 'OKS' : 'Loss'}=${metric.toFixed(4)}`;
+    const metricText = metric === undefined ? `loss=${input.point.metrics.loss?.toFixed(4) ?? '--'}` : `${input.type === 'detection' || input.type === 'instance_segmentation' || (input.type === 'keypoint' && input.model?.includes('-pose')) ? 'mAP@50' : input.type === 'segmentation' ? 'mIoU' : input.type === 'keypoint' ? 'OKS' : 'Loss'}=${metric.toFixed(4)}`;
     await appendTrainingEvent(input.jobId, input.workspaceId, 'info', `Epoch ${input.point.epoch}/${input.totalEpochs} · ${metricText}`);
   }
 }
@@ -225,6 +228,8 @@ async function persistResourceSample(jobId: string, workspaceId: string, event: 
 
 function modelFamily(model: string) {
   const normalized = model.toLowerCase();
+  if (normalized.startsWith('yolov8') && normalized.endsWith('-seg')) return 'yolov8-seg';
+  if (normalized.startsWith('yolov8') && normalized.endsWith('-pose')) return 'yolov8-pose';
   if (normalized.includes('yolov5')) return 'yolov5';
   if (normalized.includes('yolov8')) return 'yolov8';
   if (normalized.includes('segformer')) return 'segformer';
@@ -240,8 +245,10 @@ function frameworkFor(model: string) {
   const family = modelFamily(model);
   if (family === 'yolov5') return 'Ultralytics YOLOv5u / PyTorch';
   if (family === 'yolov8') return 'Ultralytics YOLOv8 / PyTorch';
+  if (family === 'yolov8-seg') return 'Ultralytics YOLOv8-Seg / PyTorch';
+  if (family === 'yolov8-pose') return 'Ultralytics YOLOv8-Pose / PyTorch';
   if (family === 'segformer') return 'Transformers SegFormer / PyTorch';
-  if (family === 'deeplabv3plus') return 'DeepLabV3+ / PyTorch';
+  if (family === 'deeplabv3plus') return model.includes('-rk') ? 'DeepLabV3+ MobileNetV2 · RK 友好结构 / PyTorch' : 'DeepLabV3+ / PyTorch';
   if (family === 'unet') return 'U-Net / PyTorch';
   if (family === 'higherhrnet') return 'HigherHRNet / PyTorch';
   if (family === 'hrnet') return 'HRNet / PyTorch';
@@ -293,6 +300,7 @@ async function handleTraining(taskId: string) {
     outputDir: datasetDir,
     task: job.type,
     format: job.config.dataFormat,
+    model: job.config.model,
     dataset: { id: job.dataset_id, name: job.name, version: 'training', classes: Array.isArray(job.classes) ? job.classes : [] },
     images: imageResult.rows.map((image) => ({ id: image.id, objectKey: image.object_key, filename: image.filename, mimeType: image.mime_type, width: image.width ? Number(image.width) : undefined, height: image.height ? Number(image.height) : undefined, split: image.split })),
     documents: imageResult.rows.map((image) => ({ imageId: image.id, annotations: image.annotations, captions: image.captions, imageAttributes: image.image_attributes })),
@@ -309,13 +317,14 @@ async function handleTraining(taskId: string) {
   let reportedEpoch = 0;
   let polling = false;
   const persistYoloMetrics = async () => {
-    if (polling || job.type !== 'detection') return;
+    const yoloCsvTask = job.type === 'detection' || job.type === 'instance_segmentation' || (job.type === 'keypoint' && String(job.model).includes('-pose'));
+    if (polling || !yoloCsvTask) return;
     polling = true;
     try {
       const csv = await readFile(path.join(outputDir, 'run', 'results.csv'), 'utf8');
       for (const point of parseYoloResultsCsv(csv)) {
         const announce = point.epoch > reportedEpoch;
-        await persistTrainingMetric({ jobId: taskId, workspaceId: job.workspace_id, type: job.type, totalEpochs, point, progress: 15 + point.epoch * 70 / totalEpochs, announce });
+        await persistTrainingMetric({ jobId: taskId, workspaceId: job.workspace_id, type: job.type, model: String(job.model), totalEpochs, point, progress: 15 + point.epoch * 70 / totalEpochs, announce });
         reportedEpoch = Math.max(reportedEpoch, point.epoch);
       }
     } catch (error) {
@@ -324,7 +333,8 @@ async function handleTraining(taskId: string) {
       polling = false;
     }
   };
-  const metricTimer = job.type === 'detection' ? setInterval(() => void persistYoloMetrics().catch((error) => console.error('Failed to persist YOLO metrics', error)), 3000) : null;
+  const yoloCsvTask = job.type === 'detection' || job.type === 'instance_segmentation' || (job.type === 'keypoint' && String(job.model).includes('-pose'));
+  const metricTimer = yoloCsvTask ? setInterval(() => void persistYoloMetrics().catch((error) => console.error('Failed to persist YOLO metrics', error)), 3000) : null;
   const cancellation = new AbortController();
   let cancellationCheckRunning = false;
   const checkCancellation = async () => {
@@ -350,7 +360,7 @@ async function handleTraining(taskId: string) {
       const metrics = metricsFromRunnerEvent(event);
       if (!Object.keys(metrics).length) return;
       const announce = epoch > reportedEpoch;
-      await persistTrainingMetric({ jobId: taskId, workspaceId: job.workspace_id, type: job.type, totalEpochs, point: { epoch, metrics }, progress: Number(event.progress ?? 15 + epoch * 70 / totalEpochs), announce });
+      await persistTrainingMetric({ jobId: taskId, workspaceId: job.workspace_id, type: job.type, model: String(job.model), totalEpochs, point: { epoch, metrics }, progress: Number(event.progress ?? 15 + epoch * 70 / totalEpochs), announce });
       reportedEpoch = Math.max(reportedEpoch, epoch);
     }, cancellation.signal);
     await persistYoloMetrics();
@@ -370,12 +380,14 @@ async function handleTraining(taskId: string) {
   }
   const artifactFile = await pickTrainingArtifact(outputDir);
   if (!artifactFile) throw new Error(`Training job ${taskId} did not produce an artifact`);
-  const metric = job.type === 'detection' ? await readDetectionMetric(outputDir) : await readTrainingMetric(outputDir);
+  const metric = job.type === 'detection' || job.type === 'instance_segmentation' || (job.type === 'keypoint' && String(job.model).includes('-pose')) ? await readDetectionMetric(outputDir) : await readTrainingMetric(outputDir);
   const artifact = await registerArtifact({ workspaceId: job.workspace_id, filePath: artifactFile, mimeType: 'application/octet-stream', sourceType: 'training_job', sourceId: taskId, createdBy: job.created_by });
   await appendTrainingEvent(taskId, job.workspace_id, 'info', `训练产物已登记：${path.basename(artifactFile)}`);
+  const architectureVariant = job.config.architectureVariant ?? modelVariantArchitecture(String(job.model));
+  const rkStatus = architectureVariant === 'rk_compatible' ? modelVariantRkStatus(String(job.model)) : 'standard_only';
   await pool.query(
-    "INSERT INTO model_versions(id, workspace_id, name, version, task, source_job, metric_name, metric_value, framework, size, formats, stage, artifact_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (id) DO NOTHING",
-    [`model-${taskId}`, job.workspace_id, job.name, String(job.config.version ?? taskId), job.type, taskId, job.type === 'segmentation' ? 'mIoU' : job.type === 'keypoint' ? 'OKS' : job.type === 'sdxl' ? 'Loss' : 'mAP@50', metric === null ? '--' : metric.value.toFixed(4), frameworkFor(job.model), formatBytes(artifact.sizeBytes), JSON.stringify([]), '评估中', artifact.id],
+    "INSERT INTO model_versions(id, workspace_id, name, version, task, source_job, metric_name, metric_value, framework, size, formats, stage, artifact_id, architecture_variant, target_family, rk_compatibility_status, output_protocol) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (id) DO NOTHING",
+    [`model-${taskId}`, job.workspace_id, job.name, String(job.config.version ?? taskId), job.type, taskId, job.type === 'segmentation' ? 'mIoU' : job.type === 'keypoint' && String(job.model).includes('-pose') ? 'mAP@50' : job.type === 'keypoint' ? 'OKS' : job.type === 'sdxl' ? 'Loss' : 'mAP@50', metric === null ? '--' : metric.value.toFixed(4), frameworkFor(job.model), formatBytes(artifact.sizeBytes), JSON.stringify([]), '评估中', artifact.id, architectureVariant, architectureVariant === 'rk_compatible' ? 'rockchip_npu' : null, rkStatus, modelVariantOutputProtocol(String(job.model))],
   );
   const completed = await pool.query("UPDATE training_jobs SET status = 'completed', progress = 100, epoch = $3, metric_value = $4, eta = '已完成', artifact_id = $2, updated_at = NOW() WHERE id = $1 AND status = 'running' RETURNING id", [taskId, artifact.id, `${metric?.epochs ?? job.config.epochs} / ${job.config.epochs}`, metric === null ? '--' : metric.value.toFixed(4)]);
   if (completed.rowCount) await appendTrainingEvent(taskId, job.workspace_id, 'info', '训练任务已完成');
@@ -383,7 +395,7 @@ async function handleTraining(taskId: string) {
 }
 
 async function handleConversion(taskId: string) {
-  const result = await pool.query('SELECT c.id, c.workspace_id, c.format, c.precision, c.target, c.model_name, c.model_version, c.created_by, c.config, m.task AS model_task, m.framework AS source_framework, a.object_key AS source_object_key, t.model AS source_model, t.config AS source_config FROM conversion_jobs c JOIN model_versions m ON m.workspace_id = c.workspace_id AND m.name = c.model_name AND m.version = c.model_version JOIN artifacts a ON a.id = m.artifact_id LEFT JOIN training_jobs t ON t.id = m.source_job WHERE c.id = $1', [taskId]);
+  const result = await pool.query('SELECT c.id, c.workspace_id, c.format, c.precision, c.target, c.model_name, c.model_version, c.created_by, c.config, m.task AS model_task, m.framework AS source_framework, m.architecture_variant, a.object_key AS source_object_key, t.model AS source_model, t.config AS source_config FROM conversion_jobs c JOIN model_versions m ON m.workspace_id = c.workspace_id AND m.name = c.model_name AND m.version = c.model_version JOIN artifacts a ON a.id = m.artifact_id LEFT JOIN training_jobs t ON t.id = m.source_job WHERE c.id = $1', [taskId]);
   const task = result.rows[0];
   if (!task) throw new Error(`Conversion job ${taskId} was not found`);
   await pool.query("UPDATE conversion_jobs SET status = 'running', updated_at = NOW() WHERE id = $1", [taskId]);
@@ -396,7 +408,7 @@ async function handleConversion(taskId: string) {
   const configuredImageSize = Number(task.source_config?.imageSize);
   const defaultImageSize = Number.isInteger(configuredImageSize) && configuredImageSize >= 128 && configuredImageSize <= 2048 ? configuredImageSize : task.model_task === 'segmentation' ? 512 : task.model_task === 'keypoint' ? 384 : task.model_task === 'sdxl' ? 1024 : 640;
   await pool.query("UPDATE conversion_jobs SET progress = 10, updated_at = NOW() WHERE id = $1", [taskId]);
-  await runPython({ kind: 'conversion', config: { ...task.config, format: task.format, precision: task.precision, target: task.target, inputShape: `1,3,${defaultImageSize},${defaultImageSize}`, modelFamily: modelFamily(String(task.source_model ?? task.source_framework ?? '')) }, sourcePath, outputDir });
+  await runPython({ kind: 'conversion', config: { ...task.config, format: task.format, precision: task.precision, target: task.target, inputShape: `1,3,${defaultImageSize},${defaultImageSize}`, modelFamily: modelFamily(String(task.source_model ?? task.source_framework ?? '')), architectureVariant: task.architecture_variant ?? 'standard' }, sourcePath, outputDir });
   const artifactName = task.format === 'ONNX' ? 'converted.onnx' : task.format === 'TensorRT' ? 'converted.engine' : task.format === 'TorchScript' ? 'converted.torchscript.pt' : 'converted-openvino.zip';
   const artifactFile = path.join(outputDir, artifactName);
   const artifactStats = await stat(artifactFile).catch(() => null);

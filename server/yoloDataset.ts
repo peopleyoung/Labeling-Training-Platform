@@ -17,6 +17,11 @@ export interface YoloDatasetInput {
   images: YoloDatasetImage[];
 }
 
+export interface YoloPoseImage extends Omit<YoloDatasetImage, 'annotations'> {
+  bbox: [number, number, number, number];
+  keypoints: Array<{ x: number; y: number; visibility: number }>;
+}
+
 function safeStem(value: string) {
   return value.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'image';
 }
@@ -101,4 +106,35 @@ export async function prepareYoloDataset(input: YoloDatasetInput) {
   ].join('\n');
   await writeFile(yamlPath, yaml, 'utf8');
   return { yamlPath, classes, counts, imageCount: counts.train + counts.val + counts.test };
+}
+
+export async function prepareYoloPoseDataset(input: { artifactRoot: string; outputDir: string; keypointCount: number; images: YoloPoseImage[] }) {
+  if (!input.keypointCount) throw new Error('YOLO-Pose 数据集缺少关键点定义');
+  const root = path.resolve(input.artifactRoot);
+  const outputDir = path.resolve(input.outputDir);
+  await rm(outputDir, { recursive: true, force: true });
+  for (const split of ['train', 'val', 'test']) {
+    await mkdir(path.join(outputDir, 'images', split), { recursive: true });
+    await mkdir(path.join(outputDir, 'labels', split), { recursive: true });
+  }
+  const counts = { train: 0, val: 0, test: 0 };
+  for (const image of input.images) {
+    if (image.keypoints.length !== input.keypointCount || image.bbox.some((value) => !Number.isFinite(value))) continue;
+    const split = splitName(image.split);
+    const [cx, cy, width, height] = image.bbox;
+    const coordinates = [cx, cy, width, height, ...image.keypoints.flatMap((point) => [point.x, point.y])];
+    if (coordinates.some((value) => !Number.isFinite(value) || value < 0 || value > 1) || image.keypoints.some((point) => !Number.isFinite(point.visibility) || point.visibility < 0 || point.visibility > 2)) continue;
+    const values = image.keypoints.flatMap((point) => [point.x, point.y, point.visibility]);
+    const sourcePath = path.resolve(root, image.objectKey);
+    if (!sourcePath.startsWith(`${root}${path.sep}`)) throw new Error(`数据集图片路径不合法：${image.filename}`);
+    const extension = path.extname(image.filename).toLowerCase() || '.jpg';
+    const stem = `${image.id.replace(/[^a-zA-Z0-9_-]/g, '_')}-${safeStem(image.filename)}`;
+    await copyFile(sourcePath, path.join(outputDir, 'images', split, `${stem}${extension}`));
+    await writeFile(path.join(outputDir, 'labels', split, `${stem}.txt`), `0 ${[cx, cy, width, height, ...values].map((value) => value.toFixed(8)).join(' ')}\n`);
+    counts[split] += 1;
+  }
+  if (!counts.train) throw new Error('训练分片没有有效 YOLO-Pose 实例');
+  const yamlPath = path.join(outputDir, 'dataset.yaml');
+  await writeFile(yamlPath, [`path: ${yamlString(outputDir)}`, 'train: images/train', `val: images/${counts.val ? 'val' : 'train'}`, ...(counts.test ? ['test: images/test'] : []), `kpt_shape: [${input.keypointCount}, 3]`, 'names:', '  0: object', ''].join('\n'), 'utf8');
+  return { yamlPath, counts, imageCount: counts.train + counts.val + counts.test };
 }

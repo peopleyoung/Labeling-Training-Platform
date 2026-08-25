@@ -16,7 +16,7 @@ import torch
 from PIL import Image, ImageDraw
 
 
-DEFAULT_MODELS = ["segformer-b0", "unet", "deeplabv3plus-resnet50", "hrnet-w32", "higherhrnet-w32"]
+DEFAULT_MODELS = ["segformer-b0", "unet", "deeplabv3plus-resnet50", "deeplabv3plus-mobilenetv2", "deeplabv3plus-mobilenetv2-rk", "deeplabv3plus-mobilenetv3-large", "hrnet-w32", "higherhrnet-w32"]
 
 
 def task_for(model: str) -> str:
@@ -56,7 +56,8 @@ def verify_model(model_name: str, root: Path, environment: dict[str, str], all_c
     manifest = write_manifest(root, task)
     output_dir = root / model_name
     module = "forge_worker.train_keypoint" if task == "keypoint" else "forge_worker.train_segmentation"
-    run([sys.executable, "-m", module, "--model", model_name, "--data", str(manifest), "--epochs", "1", "--batch-size", "1", "--image-size", "128", "--output-dir", str(output_dir), "--learning-rate", "0.001", "--weight-source", weight_source, "--device", "cpu"], environment)
+    architecture_variant = "rk_compatible" if model_name.endswith("-rk") else "standard"
+    run([sys.executable, "-m", module, "--model", model_name, "--data", str(manifest), "--epochs", "1", "--batch-size", "1", "--image-size", "128", "--output-dir", str(output_dir), "--learning-rate", "0.001", "--weight-source", weight_source, "--architecture-variant", architecture_variant, "--device", "cpu"], environment)
     artifact = output_dir / "model.torchscript.pt"
     loaded = torch.jit.load(str(artifact), map_location="cpu").eval()
     prediction = loaded(torch.randn(1, 3, 128, 128))
@@ -65,7 +66,7 @@ def verify_model(model_name: str, root: Path, environment: dict[str, str], all_c
     if torch.allclose(loaded(torch.zeros(1, 3, 128, 128)), loaded(torch.ones(1, 3, 128, 128)), atol=1e-6, rtol=1e-5):
         raise RuntimeError(f"TorchScript {model_name} output does not depend on its input")
     conversion_dir = root / f"{model_name}-onnx"
-    run([sys.executable, "-m", "forge_worker.convert", "onnx", "--source", str(artifact), "--output-dir", str(conversion_dir), "--precision", "FP32", "--model-family", model_name.split("-")[0], "--device", "cpu", "--input-shape", "1,3,128,128", "--opset", "18"], environment)
+    run([sys.executable, "-m", "forge_worker.convert", "onnx", "--source", str(artifact), "--output-dir", str(conversion_dir), "--precision", "FP32", "--model-family", model_name.split("-")[0], "--architecture-variant", architecture_variant, "--device", "cpu", "--input-shape", "1,3,128,128", "--opset", "13" if architecture_variant == "rk_compatible" else "18"], environment)
     onnx.checker.check_model(onnx.load(str(conversion_dir / "converted.onnx")))
     session = ort.InferenceSession(str(conversion_dir / "converted.onnx"), providers=["CPUExecutionProvider"])
     input_name = session.get_inputs()[0].name
@@ -81,10 +82,10 @@ def verify_model(model_name: str, root: Path, environment: dict[str, str], all_c
         raise RuntimeError(f"ONNX {model_name} output does not depend on its input")
     if all_cpu_formats:
         torchscript_dir = root / f"{model_name}-torchscript"
-        run([sys.executable, "-m", "forge_worker.convert", "torchscript", "--source", str(artifact), "--output-dir", str(torchscript_dir), "--precision", "FP32", "--model-family", model_name.split("-")[0], "--device", "cpu"], environment)
+        run([sys.executable, "-m", "forge_worker.convert", "torchscript", "--source", str(artifact), "--output-dir", str(torchscript_dir), "--precision", "FP32", "--model-family", model_name.split("-")[0], "--architecture-variant", architecture_variant, "--device", "cpu"], environment)
         torch.jit.load(str(torchscript_dir / "converted.torchscript.pt"), map_location="cpu")
         openvino_dir = root / f"{model_name}-openvino"
-        run([sys.executable, "-m", "forge_worker.convert", "openvino", "--source", str(artifact), "--output-dir", str(openvino_dir), "--precision", "FP32", "--model-family", model_name.split("-")[0], "--device", "cpu", "--input-shape", "1,3,128,128", "--target", "Intel CPU"], environment)
+        run([sys.executable, "-m", "forge_worker.convert", "openvino", "--source", str(artifact), "--output-dir", str(openvino_dir), "--precision", "FP32", "--model-family", model_name.split("-")[0], "--architecture-variant", architecture_variant, "--device", "cpu", "--input-shape", "1,3,128,128", "--target", "Intel CPU"], environment)
         with zipfile.ZipFile(openvino_dir / "converted-openvino.zip") as archive:
             names = archive.namelist()
             if not any(name.endswith(".xml") for name in names) or not any(name.endswith(".bin") for name in names):

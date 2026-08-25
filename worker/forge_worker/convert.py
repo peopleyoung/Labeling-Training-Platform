@@ -25,13 +25,46 @@ def parse_image_size(input_shape: str) -> Tuple[int, int]:
     return dimensions[-2], dimensions[-1]
 
 
-def validate_onnx(path: Path) -> None:
+def output_protocol(model_family: str) -> str:
+    if model_family == "yolov8-seg":
+        return "yolo_segmentation"
+    if model_family == "yolov8-pose":
+        return "yolo_pose"
+    if model_family in {"yolov5", "yolov8"}:
+        return "yolo_detection"
+    if model_family in {"hrnet", "higherhrnet"}:
+        return "heatmap"
+    if model_family == "sdxl":
+        return "sdxl_unet"
+    return "segmentation_logits"
+
+
+def annotate_onnx(path: Path, model_family: str, architecture_variant: str, input_shape: str, precision: str, opset: int) -> None:
     try:
         import onnx
     except ImportError as error:
         raise RuntimeError("ONNX validation dependency is not installed") from error
     model = onnx.load(str(path))
     onnx.checker.check_model(model)
+    values = {
+        "targetFamily": "rockchip_npu" if architecture_variant == "rk_compatible" else "general_runtime",
+        "architectureVariant": architecture_variant,
+        "preferredLayout": "NCHW",
+        "staticBatch": "1",
+        "supportedOpset": str(opset),
+        "inputShape": input_shape,
+        "precision": precision,
+        "outputProtocol": output_protocol(model_family),
+        "externalPostprocess": "true",
+    }
+    existing = {entry.key: entry for entry in model.metadata_props}
+    for key, value in values.items():
+        entry = existing.get(key)
+        if entry is None:
+            entry = model.metadata_props.add()
+            entry.key = key
+        entry.value = value
+    onnx.save(model, str(path))
 
 
 def locate_file(root: Path, suffixes: Tuple[str, ...], excluded: Path) -> Path:
@@ -54,7 +87,7 @@ def package_openvino(root: Path, excluded: Path, target: Path) -> None:
         archive.replace(target)
 
 
-def normalize_yolo_output(format_name: str, root: Path, local_source: Path) -> Path:
+def normalize_yolo_output(format_name: str, root: Path, local_source: Path, args: argparse.Namespace) -> Path:
     target = root / OUTPUT_NAMES[format_name]
     if format_name == "openvino":
         package_openvino(root, local_source, target)
@@ -68,7 +101,7 @@ def normalize_yolo_output(format_name: str, root: Path, local_source: Path) -> P
     if generated != target:
         shutil.copy2(generated, target)
     if format_name == "onnx":
-        validate_onnx(target)
+        annotate_onnx(target, args.model_family, args.architecture_variant, args.input_shape, args.precision, args.opset)
     if not target.is_file() or target.stat().st_size == 0:
         raise RuntimeError(f"{format_name} exporter produced an empty artifact")
     return target
@@ -95,15 +128,15 @@ def export_ultralytics_yolo(args: argparse.Namespace, source: Path, output_dir: 
         options.update({"opset": args.opset, "dynamic": args.dynamic_batch})
     emit("executor", adapter="ultralytics", format=export_format, options=options)
     YOLO(str(local_source)).export(**options)
-    artifact = normalize_yolo_output(args.format, output_dir, local_source)
+    artifact = normalize_yolo_output(args.format, output_dir, local_source, args)
     local_source.unlink(missing_ok=True)
     return artifact
 
 
-def convert_generic_onnx(source: Path, target: Path, precision: str, opset: int, input_shape: str, dynamic_batch: bool) -> Path:
+def convert_generic_onnx(source: Path, target: Path, precision: str, opset: int, input_shape: str, dynamic_batch: bool, model_family: str, architecture_variant: str) -> Path:
     if source.suffix.lower() == ".onnx":
         shutil.copy2(source, target)
-        validate_onnx(target)
+        annotate_onnx(target, model_family, architecture_variant, input_shape, precision, opset)
         return target
     try:
         import torch
@@ -121,7 +154,7 @@ def convert_generic_onnx(source: Path, target: Path, precision: str, opset: int,
         sample = sample.half()
     dynamic_axes = {"input": {0: "batch"}, "output": {0: "batch"}} if dynamic_batch else None
     torch.onnx.export(model, sample, str(target), input_names=["input"], output_names=["output"], dynamic_axes=dynamic_axes, opset_version=opset, do_constant_folding=True)
-    validate_onnx(target)
+    annotate_onnx(target, model_family, architecture_variant, input_shape, precision, opset)
     return target
 
 
@@ -198,9 +231,9 @@ def convert_generic_tensorrt(source: Path, output_dir: Path, precision: str, inp
     onnx_path = output_dir / "source.onnx"
     if source.suffix.lower() == ".onnx":
         shutil.copy2(source, onnx_path)
-        validate_onnx(onnx_path)
+        annotate_onnx(onnx_path, "unknown", "standard", input_shape, "FP32", 18)
     else:
-        convert_generic_onnx(source, onnx_path, "FP32", 18, input_shape, False)
+        convert_generic_onnx(source, onnx_path, "FP32", 18, input_shape, False, "unknown", "standard")
     return build_tensorrt_engine(onnx_path, output_dir / OUTPUT_NAMES["tensorrt"], precision)
 
 
@@ -246,7 +279,7 @@ def export_sdxl_onnx(source: Path, target: Path, precision: str, input_shape: st
         torch.tensor([[height, width, 0, 0, height, width]], device="cuda", dtype=dtype),
     )
     torch.onnx.export(Wrapper(unet), inputs, str(target), input_names=["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], output_names=["noise_pred"], opset_version=18, do_constant_folding=True)
-    validate_onnx(target)
+    annotate_onnx(target, "sdxl", "standard", input_shape, precision, 18)
     return target
 
 
@@ -284,6 +317,7 @@ def main() -> int:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--precision", required=True)
     parser.add_argument("--model-family", default="unknown")
+    parser.add_argument("--architecture-variant", choices=["standard", "rk_compatible"], default="standard")
     parser.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
     parser.add_argument("--gpu")
     parser.add_argument("--target")
@@ -297,12 +331,12 @@ def main() -> int:
         raise RuntimeError(f"Source model file does not exist: {source}")
     emit("progress", stage="load", progress=20, source=args.source, modelFamily=args.model_family)
     emit("progress", stage="convert", progress=60, format=args.format, precision=args.precision)
-    if args.model_family in {"yolov5", "yolov8"}:
+    if args.model_family in {"yolov5", "yolov8", "yolov8-seg", "yolov8-pose"}:
         artifact = export_ultralytics_yolo(args, source, output_dir)
     elif args.model_family == "sdxl":
         artifact = convert_sdxl(args, source, output_dir)
     elif args.format == "onnx":
-        artifact = convert_generic_onnx(source, output_dir / OUTPUT_NAMES[args.format], args.precision, args.opset, args.input_shape, args.dynamic_batch)
+        artifact = convert_generic_onnx(source, output_dir / OUTPUT_NAMES[args.format], args.precision, args.opset, args.input_shape, args.dynamic_batch, args.model_family, args.architecture_variant)
     elif args.format == "torchscript":
         artifact = convert_generic_torchscript(source, output_dir / OUTPUT_NAMES[args.format], args.precision)
     elif args.format == "openvino":
@@ -319,6 +353,9 @@ def main() -> int:
         "target": args.target or args.gpu,
         "source": str(source),
         "modelFamily": args.model_family,
+        "architectureVariant": args.architecture_variant,
+        "targetFamily": "rockchip_npu" if args.architecture_variant == "rk_compatible" else "general_runtime",
+        "outputProtocol": output_protocol(args.model_family),
         "realConversion": True,
     })
     emit("progress", stage="validate", progress=95)

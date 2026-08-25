@@ -3,6 +3,7 @@ import type { TrainingDataFormat, TrainingType } from '../types';
 export const taskLabels = {
   detection: '目标检测',
   segmentation: '语义分割',
+  instance_segmentation: '实例分割',
   keypoint: '关键点检测',
   sdxl: 'SDXL 微调',
 } as const;
@@ -13,6 +14,7 @@ export const dataFormatDescriptions = {
   VOC: { label: 'Pascal VOC', description: '每张图像对应一个边界框 XML', task: 'detection' },
   COCO_SEGMENTATION: { label: 'COCO Segmentation', description: 'COCO JSON 多边形与区域分割标注', task: 'segmentation' },
   PNG_MASK: { label: 'PNG Mask', description: '索引 PNG 掩码与类别映射', task: 'segmentation' },
+  YOLO_SEG: { label: 'YOLO Segmentation', description: 'YOLO 实例多边形与类别标注，适用于 YOLOv8-Seg', task: 'instance_segmentation' },
   COCO_KEYPOINTS: { label: 'COCO Keypoints', description: '每张图像一个编号关键点实例', task: 'keypoint' },
   IMAGE_FOLDER: { label: 'Image Folder + Prompt', description: 'SDXL 图像与提示词目录', task: 'sdxl' },
 } as const satisfies Record<TrainingDataFormat, { label: string; description: string; task: TrainingType }>;

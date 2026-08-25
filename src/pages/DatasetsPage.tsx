@@ -13,6 +13,7 @@ type DatasetFilter = 'all' | '标注中' | '待审核' | '可训练';
 const exportFormatGroups: { task: TrainingType; formats: { id: DataFormat; icon: typeof FileJson }[] }[] = [
   { task: 'detection', formats: [{ id: 'YOLO', icon: FileStack }, { id: 'COCO', icon: FileJson }, { id: 'VOC', icon: FileArchive }] },
   { task: 'segmentation', formats: [{ id: 'COCO_SEGMENTATION', icon: FileJson }, { id: 'PNG_MASK', icon: FileStack }] },
+  { task: 'instance_segmentation', formats: [{ id: 'YOLO_SEG', icon: FileStack }] },
   { task: 'keypoint', formats: [{ id: 'COCO_KEYPOINTS', icon: FileJson }] },
   { task: 'sdxl', formats: [{ id: 'IMAGE_FOLDER', icon: FileJson }] },
 ];

@@ -38,7 +38,7 @@ def main() -> int:
     scaler = torch.amp.GradScaler("cuda", enabled=args.fp16 and device.type == "cuda")
     criterion = nn.CrossEntropyLoss()
     loaded_source = pretrained_source(args.model) if args.weight_source == "pretrained" else None
-    emit("progress", stage="prepare", progress=10, model=args.model, samples=len(train_loader.dataset), device=str(device), dataFormat=data_format, weightSource=args.weight_source, pretrainedSource=loaded_source)
+    emit("progress", stage="prepare", progress=10, model=args.model, architectureVariant=args.architecture_variant, samples=len(train_loader.dataset), device=str(device), dataFormat=data_format, weightSource=args.weight_source, pretrainedSource=loaded_source)
     last_loss = 0.0
     metric = 0.0
     for epoch in range(args.epochs):
@@ -63,7 +63,7 @@ def main() -> int:
     artifact = output_dir / "model.torchscript.pt"
     torch.jit.trace(export_model, torch.randn(1, 3, args.image_size, args.image_size), strict=False).save(str(artifact))
     write_json_artifact(output_dir, "metrics.json", {"metricName": "mIoU", "metricValue": metric, "epochs": args.epochs, "loss": last_loss})
-    manifest_path = write_json_artifact(output_dir, "manifest.json", {"task": "segmentation", "model": args.model, "dataFormat": data_format, "artifact": artifact.name, "sha256": sha256_file(artifact), "classes": ["background", *classes], "inputShape": [1, 3, args.image_size, args.image_size], "weightSource": args.weight_source, "pretrainedSource": loaded_source, "metrics": {"mIoU": metric, "loss": last_loss}, "realTraining": True})
+    manifest_path = write_json_artifact(output_dir, "manifest.json", {"task": "segmentation", "model": args.model, "architectureVariant": args.architecture_variant, "targetFamily": "rockchip_npu" if args.architecture_variant == "rk_compatible" else "general_runtime", "outputProtocol": "segmentation_logits", "dataFormat": data_format, "artifact": artifact.name, "sha256": sha256_file(artifact), "classes": ["background", *classes], "inputShape": [1, 3, args.image_size, args.image_size], "weightSource": args.weight_source, "pretrainedSource": loaded_source, "metrics": {"mIoU": metric, "loss": last_loss}, "realTraining": True})
     emit("artifact", path=str(artifact), manifest=str(manifest_path), sha256=sha256_file(artifact))
     return 0
 

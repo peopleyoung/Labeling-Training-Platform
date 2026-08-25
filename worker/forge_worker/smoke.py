@@ -8,11 +8,15 @@ from forge_worker.runner import build_conversion_command, build_training_command
 TRAINING_PROFILES = [
     ("detection", "yolov5m", 640, 8),
     ("detection", "yolov8m", 640, 8),
+    ("instance_segmentation", "yolov8m-seg", 640, 4),
     ("segmentation", "segformer-b2", 512, 4),
     ("segmentation", "unet", 512, 8),
     ("segmentation", "deeplabv3plus-resnet50", 512, 4),
+    ("segmentation", "deeplabv3plus-mobilenetv2", 512, 8),
+    ("segmentation", "deeplabv3plus-mobilenetv2-rk", 512, 8),
     ("keypoint", "hrnet-w32", 384, 8),
     ("keypoint", "higherhrnet-w32", 512, 4),
+    ("keypoint", "yolov8m-pose", 640, 4),
 ]
 
 SDXL_PROFILES = [
@@ -23,8 +27,9 @@ SDXL_PROFILES = [
 
 def main() -> None:
     for task_type, model, image_size, batch_size in TRAINING_PROFILES:
-        data_format = {"detection": "YOLO", "segmentation": "COCO_SEGMENTATION", "keypoint": "COCO_KEYPOINTS"}[task_type]
-        config = {"type": task_type, "dataFormat": data_format, "model": model, "weightSource": "pretrained", "epochs": 3, "batchSize": batch_size, "imageSize": image_size, "mixedPrecision": True}
+        data_format = {"detection": "YOLO", "instance_segmentation": "YOLO_SEG", "segmentation": "COCO_SEGMENTATION", "keypoint": "COCO_KEYPOINTS"}[task_type]
+        architecture_variant = "rk_compatible" if model.endswith("-rk") or "yolo" in model else "standard"
+        config = {"type": task_type, "dataFormat": data_format, "model": model, "architectureVariant": architecture_variant, "weightSource": "pretrained", "epochs": 3, "batchSize": batch_size, "imageSize": image_size, "mixedPrecision": True}
         validate_training_config(config)
         command = build_training_command(config, "/data/dataset.yaml", "/data/output")
         if model.startswith(("yolov5", "yolov8")):
@@ -62,6 +67,9 @@ def main() -> None:
         assert "--model-family" in command.command
         assert "yolov8" in command.command
         print(f"conversion {format_name}: {' '.join(command.command[:4])}")
+    rk_command = build_conversion_command({"format": "ONNX", "precision": "FP32", "target": "通用 CPU / GPU", "modelFamily": "deeplabv3plus", "architectureVariant": "rk_compatible", "optionA": "13", "optionB": "batch-1", "inputShape": "1,3,512,512"}, "/data/model.pt", "/data/output")
+    assert "--opset" in rk_command.command and "13" in rk_command.command
+    assert "--dynamic-batch" not in rk_command.command
 
 
 if __name__ == "__main__":

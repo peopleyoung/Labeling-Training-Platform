@@ -1,7 +1,7 @@
 export const userRoles = ['admin', 'engineer', 'annotator'] as const;
 export type UserRole = (typeof userRoles)[number];
 
-export const trainingTypes = ['detection', 'segmentation', 'keypoint', 'sdxl'] as const;
+export const trainingTypes = ['detection', 'segmentation', 'instance_segmentation', 'keypoint', 'sdxl'] as const;
 export type TrainingType = (typeof trainingTypes)[number];
 
 export const jobStatuses = ['queued', 'running', 'completed', 'failed', 'cancelled'] as const;
@@ -10,16 +10,34 @@ export type JobStatus = (typeof jobStatuses)[number];
 export const conversionFormats = ['ONNX', 'TensorRT', 'TorchScript', 'OpenVINO'] as const;
 export type ConversionFormat = (typeof conversionFormats)[number];
 
-export const dataFormats = ['YOLO', 'COCO', 'VOC', 'COCO_SEGMENTATION', 'PNG_MASK', 'COCO_KEYPOINTS', 'IMAGE_FOLDER'] as const;
+export const dataFormats = ['YOLO', 'COCO', 'VOC', 'COCO_SEGMENTATION', 'PNG_MASK', 'YOLO_SEG', 'COCO_KEYPOINTS', 'IMAGE_FOLDER'] as const;
 export type DataFormat = (typeof dataFormats)[number];
 export type TrainingDataFormat = DataFormat;
 
 export const trainingDataFormats = {
   detection: ['YOLO', 'COCO', 'VOC'],
   segmentation: ['COCO_SEGMENTATION', 'PNG_MASK'],
+  instance_segmentation: ['YOLO_SEG'],
   keypoint: ['COCO_KEYPOINTS'],
   sdxl: ['IMAGE_FOLDER'],
 } as const satisfies Record<TrainingType, readonly TrainingDataFormat[]>;
+
+export const architectureVariants = ['standard', 'rk_compatible'] as const;
+export type ArchitectureVariant = (typeof architectureVariants)[number];
+
+export const rkCompatibilityStatuses = ['not_reviewed', 'standard_only', 'rk_structure_ready', 'onnx_validated', 'device_validated'] as const;
+export type RkCompatibilityStatus = (typeof rkCompatibilityStatuses)[number];
+
+export const outputProtocols = ['segmentation_logits', 'yolo_detection', 'yolo_segmentation', 'yolo_pose', 'heatmap', 'sdxl_unet'] as const;
+export type OutputProtocol = (typeof outputProtocols)[number];
+
+export interface ModelVariantMetadata {
+  architectureVariant: ArchitectureVariant;
+  targetFamily?: 'rockchip_npu';
+  rkCompatibilityStatus: RkCompatibilityStatus;
+  outputProtocol: OutputProtocol;
+  supportedOpset?: number;
+}
 
 export const annotationTypes = ['rectangle', 'polygon', 'keypoint', 'polyline', 'ellipse', 'skeleton'] as const;
 export type AnnotationType = (typeof annotationTypes)[number];
@@ -115,7 +133,7 @@ export interface AnnotationKeypoint extends AnnotationPoint {
 export type AnnotationGeometry =
   | { type: 'rectangle'; x: number; y: number; width: number; height: number }
   | { type: 'polygon'; points: AnnotationPoint[] }
-  | { type: 'keypoint'; x: number; y: number; index: number }
+  | { type: 'keypoint'; x: number; y: number; index: number; visibility?: 0 | 1 | 2 }
   | { type: 'polyline'; points: AnnotationPoint[]; strokeWidth: number }
   | { type: 'ellipse'; cx: number; cy: number; rx: number; ry: number; rotation: number }
   | { type: 'skeleton'; points: AnnotationKeypoint[]; edges: Array<[number, number]> };
@@ -125,6 +143,8 @@ export interface AnnotationRecord {
   label: string;
   color: string;
   geometry: AnnotationGeometry;
+  /** Optional instance grouping used by YOLO-Seg and multi-instance pose data. */
+  instanceId?: string;
   locked?: boolean;
 }
 
@@ -196,6 +216,7 @@ export interface TrainingDraft {
   version: string;
   datasetId: string;
   model: string;
+  architectureVariant?: ArchitectureVariant;
   weightSource: 'pretrained' | 'scratch';
   epochs: number;
   batchSize: number;
@@ -276,6 +297,10 @@ export interface ModelVersion {
   formats: ConversionFormat[];
   stage: '生产候选' | '评估中' | '已归档';
   artifactId?: string;
+  architectureVariant?: ArchitectureVariant;
+  targetFamily?: 'rockchip_npu';
+  rkCompatibilityStatus?: RkCompatibilityStatus;
+  outputProtocol?: OutputProtocol;
 }
 
 export interface ConversionTask {

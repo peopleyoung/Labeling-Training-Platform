@@ -158,6 +158,32 @@ class ASPP(nn.Module):
 class DeepLabV3Plus(nn.Module):
     def __init__(self, classes: int, backbone_name: str, pretrained: bool):
         super().__init__()
+        self.rockchip_variant = backbone_name.endswith("-rk")
+        if "mobilenetv2" in backbone_name or "mobilenetv3" in backbone_name:
+            from torchvision.models import MobileNet_V2_Weights, MobileNet_V3_Large_Weights, mobilenet_v2, mobilenet_v3_large
+            is_v3 = "mobilenetv3" in backbone_name
+            backbone = mobilenet_v3_large(weights=MobileNet_V3_Large_Weights.IMAGENET1K_V2 if pretrained else None) if is_v3 else mobilenet_v2(weights=MobileNet_V2_Weights.IMAGENET1K_V1 if pretrained else None)
+            # The standard variant keeps the native MobileNetV2 feature stride.
+            # The RK-friendly variant exposes an explicit feature pyramid,
+            # ReLU6 activations and a narrow 1x1 projection that maps cleanly to
+            # Rockchip NPU convolution/resize operators.
+            if self.rockchip_variant:
+                self.low_encoder = nn.Sequential(*list(backbone.features[:4]))
+                self.high_encoder = nn.Sequential(*list(backbone.features[4:14]))
+                self.tail_encoder = nn.Sequential(*list(backbone.features[14:]))
+                self.high_projection = nn.Sequential(nn.Conv2d(1280, 256, 1, bias=False), nn.BatchNorm2d(256), nn.ReLU6(inplace=True))
+                self.low_projection = nn.Sequential(nn.Conv2d(24, 48, 1, bias=False), nn.BatchNorm2d(48), nn.ReLU6(inplace=True))
+                self.aspp = ASPP(256, 128)
+                self.decoder = nn.Sequential(DoubleConv(128 + 48, 128), nn.Conv2d(128, classes, 1))
+            else:
+                self.low_encoder = nn.Sequential(*list(backbone.features[:4]))
+                self.high_encoder = nn.Sequential(*list(backbone.features[4:]))
+                low_channels = 24 if is_v3 else 24
+                high_channels = 960 if is_v3 else 1280
+                self.low_projection = nn.Sequential(nn.Conv2d(low_channels, 48, 1, bias=False), nn.BatchNorm2d(48), nn.ReLU(inplace=True))
+                self.aspp = ASPP(high_channels, 256)
+                self.decoder = nn.Sequential(DoubleConv(256 + 48, 256), nn.Conv2d(256, classes, 1))
+            return
         from torchvision.models import ResNet50_Weights, ResNet101_Weights, resnet50, resnet101
         if "101" in backbone_name:
             backbone = resnet101(weights=ResNet101_Weights.IMAGENET1K_V2 if pretrained else None, replace_stride_with_dilation=[False, True, True])
@@ -170,6 +196,15 @@ class DeepLabV3Plus(nn.Module):
         self.decoder = nn.Sequential(DoubleConv(304, 256), nn.Conv2d(256, classes, 1))
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        if hasattr(self, "low_encoder"):
+            low = self.low_encoder(inputs)
+            features = self.high_encoder(low)
+            if hasattr(self, "tail_encoder"):
+                features = self.tail_encoder(features)
+                features = self.high_projection(features)
+            high = self.aspp(features)
+            high = F.interpolate(high, size=low.shape[-2:], mode="nearest" if self.rockchip_variant else "bilinear", align_corners=None if self.rockchip_variant else False)
+            return self.decoder(torch.cat((high, self.low_projection(low)), dim=1))
         features = self.stem(inputs)
         low = self.layer1(features)
         features = self.layer4(self.layer3(self.layer2(low)))

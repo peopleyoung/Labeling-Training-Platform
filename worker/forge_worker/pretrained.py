@@ -19,6 +19,9 @@ PRETRAINED_MODELS = [
     "unet",
     "deeplabv3plus-resnet50",
     "deeplabv3plus-resnet101",
+    "deeplabv3plus-mobilenetv2",
+    "deeplabv3plus-mobilenetv2-rk",
+    "deeplabv3plus-mobilenetv3-large",
     *TIMM_HRNET_SOURCES,
 ]
 
@@ -74,6 +77,10 @@ def pretrained_source(model_name: str) -> str:
         return "torchvision/resnet101/IMAGENET1K_V2"
     if model_name == "deeplabv3plus-resnet50":
         return "torchvision/resnet50/IMAGENET1K_V2"
+    if model_name in {"deeplabv3plus-mobilenetv2", "deeplabv3plus-mobilenetv2-rk"}:
+        return "torchvision/mobilenet_v2/IMAGENET1K_V1"
+    if model_name == "deeplabv3plus-mobilenetv3-large":
+        return "torchvision/mobilenet_v3_large/IMAGENET1K_V2"
     if model_name.startswith(("hrnet", "higherhrnet")):
         local_checkpoint = local_hrnet_checkpoint(model_name)
         if local_checkpoint:

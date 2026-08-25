@@ -389,3 +389,79 @@ persisted annotations + explicit weightSource -> versioned manifest
   -> raster mask / heatmap -> model forward -> real loss.backward() -> optimizer.step()
   -> loadable TorchScript -> ONNX export -> onnx.checker
 ```
+
+## Scenario: Model Architecture Variants And RK-Friendly ONNX
+
+### 1. Scope / Trigger
+
+- Trigger: adding a model family, instance-segmentation or pose task, architecture variant, model compatibility field, or RK-friendly ONNX export path.
+- Reason: an RK label crosses the catalog, training request, database, Worker and conversion artifact. A UI-only badge or an export-only option can otherwise claim compatibility that the trained model and persisted lineage do not support.
+
+### 2. Signatures
+
+- `TrainingType` includes `instance_segmentation`; its standard data format is `YOLO_SEG`.
+- `TrainingDraft.architectureVariant?: 'standard' | 'rk_compatible'` is validated and persisted in `training_jobs.config`.
+- `ModelVariantMetadata = { architectureVariant, targetFamily?, rkCompatibilityStatus, outputProtocol, supportedOpset? }` is owned by `shared/modelCatalog.ts`.
+- `model_versions` persists `architecture_variant`, `target_family`, `rk_compatibility_status`, and `output_protocol` through migration `010_model_architecture_variants.sql`.
+- RK-friendly conversion invokes `forge_worker.convert onnx` with a fixed `--input-shape`, `--opset 12|13`, `--architecture-variant rk_compatible`, and no dynamic batch.
+- Output protocols are `segmentation_logits | yolo_detection | yolo_segmentation | yolo_pose | heatmap | sdxl_unet`.
+
+### 3. Contracts
+
+- The model catalog is the source of truth for supported variants and their RK readiness. API, UI and Worker must import or derive from that catalog instead of maintaining independent compatibility lists.
+- DeepLabV3+ exposes separate MobileNetV2 variants: `deeplabv3plus-mobilenetv2` is the standard backbone and `deeplabv3plus-mobilenetv2-rk` is the RK-specific backbone. The `-rk` model id always requires `architectureVariant='rk_compatible'`.
+- YOLOv5u, YOLOv8, YOLOv8-Seg and YOLOv8-Pose may use the RK-friendly path. `YOLO_SEG` preserves per-instance polygons through `AnnotationRecord.instanceId`; COCO keypoints preserve optional visibility `0 | 1 | 2`.
+- A standard-only catalog model must reject `rk_compatible`. Selecting `standard` must persist `standard_only` and must not inherit the catalog's RK badge accidentally.
+- Successful training copies the selected architecture variant into `model_versions`; conversion reads the persisted model value rather than guessing from a display name.
+- RK-friendly ONNX uses static batch 1, NCHW, a fixed spatial shape and opset 12 or 13. Detection NMS, segmentation mask decoding and pose decoding remain external runtime post-processing.
+- `rk_structure_ready` means the structure and export contract are ready for a Rockchip NPU toolchain. It does not mean device validation, performance certification or RKNN generation.
+- The platform exports ONNX only. It does not bundle RKNN Toolkit and must never describe an ONNX artifact as RKNN.
+
+### 4. Validation & Error Matrix
+
+- `model.endsWith('-rk')` with `architectureVariant!='rk_compatible'` -> `400 RK_VARIANT_REQUIRED`, no training row or queue item.
+- `architectureVariant='rk_compatible'` for a standard-only catalog model -> `400 RK_VARIANT_UNAVAILABLE`, no training row or queue item.
+- `instance_segmentation` with a format other than `YOLO_SEG` -> `400 VALIDATION_ERROR` with `fields.dataFormat`.
+- RK-friendly ONNX with dynamic batch, batch other than 1, or opset outside 12/13 -> Worker configuration failure and no conversion artifact.
+- Missing instance polygons for a YOLO-Seg train split -> training preparation failure and no model registration.
+- Missing positive keypoint indices for YOLO-Pose -> training preparation failure and no model registration.
+
+### 5. Good/Base/Bad Cases
+
+- Good: train `deeplabv3plus-mobilenetv2-rk` with `rk_compatible`, persist `rockchip_npu` plus `segmentation_logits`, then export static batch-1 opset-13 ONNX with metadata.
+- Base: train standard MobileNetV2, persist `standard_only`, then export a normal ONNX without an RK compatibility claim.
+- Bad: train the standard backbone but change only the model badge to RK-friendly, allow dynamic RK ONNX, embed unsupported post-processing, or name an ONNX file `.rknn`.
+
+### 6. Tests Required
+
+- Shared schema/API tests assert valid and invalid task/format/architecture combinations and stable error codes.
+- Migration smoke asserts the new task/format constraints and all four model lineage columns.
+- Dataset tests assert YOLO-Seg instance grouping and YOLO-Pose visibility/index handling.
+- Worker command smoke asserts YOLO-Seg, YOLO-Pose and both MobileNetV2 variants route to their intended trainers.
+- Conversion smoke asserts RK-friendly ONNX uses static batch 1 and opset 12/13, passes `onnx.checker`, and contains architecture, target-family, input-shape and output-protocol metadata.
+- Frontend tests assert the five task cards, standard/RK model labels, disabled invalid architecture choices, and RK conversion controls.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+const rkCompatible = modelName.includes('yolo');
+await createConversion({ dynamicBatch: true, opset: 18 });
+```
+
+#### Correct
+
+```ts
+const metadata = modelVariantMetadata(modelName);
+if (draft.architectureVariant === 'rk_compatible' && metadata?.architectureVariant !== 'rk_compatible') {
+  throw new HttpError(400, 'RK_VARIANT_UNAVAILABLE', 'The selected model has no RK-friendly variant');
+}
+
+await runConversion({
+  architectureVariant: model.architectureVariant,
+  inputShape: `1,3,${imageSize},${imageSize}`,
+  opset: 13,
+  dynamicBatch: false,
+});
+```

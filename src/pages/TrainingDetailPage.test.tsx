@@ -88,4 +88,12 @@ describe('TrainingDetailPage retry action', () => {
       { name: 'Loss', values: [0.12], axis: 'right', format: 'number' },
     ]);
   });
+
+  it('uses mAP for YOLO-Pose result points while preserving the heatmap OKS path', () => {
+    const point = { id: 'metric-pose', jobId: 'train-pose', epoch: 1, progress: 10, metrics: { mAP50: 0.81, loss: 0.2 }, createdAt: '2026-07-28T00:00:00.000Z' };
+    expect(buildTrainingMetricSeries('keypoint', [point])).toMatchObject([
+      { name: 'mAP@50', values: [0.81], axis: 'left', format: 'score' },
+      { name: 'Loss', values: [0.2], axis: 'right', format: 'number' },
+    ]);
+  });
 });

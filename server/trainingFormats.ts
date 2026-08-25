@@ -4,7 +4,7 @@ import { XMLParser } from 'fast-xml-parser';
 import type { AnnotationRecord, DataFormat, TrainingDataFormat, TrainingType } from '../shared/contracts';
 import { materializeDatasetFormat, type DatasetExportInput, type ExportAnnotationDocument, type ExportImage } from './datasetExport';
 import { prepareStructuredTrainingDataset } from './trainingDataset';
-import { prepareYoloDataset } from './yoloDataset';
+import { prepareYoloDataset, prepareYoloPoseDataset } from './yoloDataset';
 
 interface FormatManifestImage {
   id: string;
@@ -41,6 +41,7 @@ export interface TrainingFormatInput {
   dataset: DatasetExportInput['dataset'];
   images: ExportImage[];
   documents: ExportAnnotationDocument[];
+  model?: string;
 }
 
 export interface PreparedTrainingFormat {
@@ -193,6 +194,27 @@ async function prepareCocoKeypoints(input: TrainingFormatInput, packageDir: stri
   return prepareStructuredTrainingDataset({ artifactRoot: input.artifactRoot, outputDir: path.join(input.outputDir, 'native'), task: 'keypoint', dataFormat: 'COCO_KEYPOINTS', classes: input.dataset.classes, images });
 }
 
+async function prepareYoloPoseFromCoco(input: TrainingFormatInput, packageDir: string, manifest: FormatManifest) {
+  const coco = await readCoco(packageDir);
+  const keypointCount = coco.categories[0]?.keypoints?.length ?? 0;
+  if (!keypointCount) throw new Error('COCO Keypoints 缺少关键点定义');
+  const cocoByFile = new Map(coco.images.map((image) => [image.file_name, image]));
+  const images = manifest.images.flatMap((source) => {
+    const image = cocoByFile.get(source.file);
+    const annotation = image ? coco.annotations.find((item) => item.image_id === image.id && item.keypoints?.length === keypointCount * 3) : undefined;
+    if (!image || !annotation?.keypoints || !annotation.bbox?.length) return [];
+    const keypoints = Array.from({ length: keypointCount }, (_, index) => ({
+      x: Number(annotation.keypoints?.[index * 3] ?? 0) / image.width,
+      y: Number(annotation.keypoints?.[index * 3 + 1] ?? 0) / image.height,
+      visibility: Number(annotation.keypoints?.[index * 3 + 2] ?? 0),
+    }));
+    const [x, y, width, height] = annotation.bbox;
+    return [{ id: source.id, objectKey: objectKey(input.artifactRoot, packageImagePath(packageDir, 'COCO_KEYPOINTS', source)), filename: source.file, split: source.split, bbox: [(x + width / 2) / image.width, (y + height / 2) / image.height, width / image.width, height / image.height] as [number, number, number, number], keypoints }];
+  });
+  const prepared = await prepareYoloPoseDataset({ artifactRoot: input.artifactRoot, outputDir: path.join(input.outputDir, 'native'), keypointCount, images });
+  return { configPath: prepared.yamlPath, imageCount: prepared.imageCount, classes: ['object'], format: input.format };
+}
+
 export async function prepareTrainingFormat(input: TrainingFormatInput): Promise<PreparedTrainingFormat> {
   if (input.format === 'IMAGE_FOLDER') {
     const packageDir = path.join(input.outputDir, 'selected');
@@ -218,7 +240,7 @@ export async function prepareTrainingFormat(input: TrainingFormatInput): Promise
   const packageDir = path.join(input.outputDir, 'selected');
   const materialized = await materializeDatasetFormat({ ...input, format: input.format, scope: 'all', versionName: 'training', includeImages: true }, packageDir);
   const manifest = await readFormatManifest(materialized.manifestPath, input.format);
-  if (input.format === 'YOLO') return { configPath: path.join(packageDir, 'dataset.yaml'), imageCount: manifest.images.length, classes: materialized.classes, format: input.format };
+  if (input.format === 'YOLO' || input.format === 'YOLO_SEG') return { configPath: path.join(packageDir, 'dataset.yaml'), imageCount: manifest.images.length, classes: materialized.classes, format: input.format };
   if (input.format === 'COCO') {
     const prepared = await prepareCocoDetection(input, packageDir, manifest);
     return { configPath: prepared.yamlPath, imageCount: prepared.imageCount, classes: prepared.classes, format: input.format };
@@ -235,6 +257,6 @@ export async function prepareTrainingFormat(input: TrainingFormatInput): Promise
     const prepared = await preparePngMasks(input, packageDir, manifest);
     return { configPath: prepared.manifestPath, imageCount: prepared.imageCount, classes: prepared.classes, format: input.format };
   }
-  const prepared = await prepareCocoKeypoints(input, packageDir, manifest);
-  return { configPath: prepared.manifestPath, imageCount: prepared.imageCount, classes: prepared.classes, format: input.format };
+  const prepared = input.model?.includes('-pose') ? await prepareYoloPoseFromCoco(input, packageDir, manifest) : await prepareCocoKeypoints(input, packageDir, manifest);
+  return { configPath: 'configPath' in prepared ? prepared.configPath : prepared.manifestPath, imageCount: prepared.imageCount, classes: prepared.classes, format: input.format };
 }

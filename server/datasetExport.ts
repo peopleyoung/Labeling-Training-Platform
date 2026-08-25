@@ -69,6 +69,7 @@ function supportsAnnotation(format: DataFormat, annotation: AnnotationRecord) {
   if (format === 'COCO_KEYPOINTS') return type === 'keypoint' || type === 'skeleton';
   if (format === 'PNG_MASK') return ['rectangle', 'polygon', 'polyline', 'ellipse'].includes(type);
   if (format === 'COCO_SEGMENTATION') return ['rectangle', 'polygon', 'ellipse'].includes(type);
+  if (format === 'YOLO_SEG') return ['rectangle', 'polygon', 'ellipse'].includes(type);
   return ['rectangle', 'polygon', 'ellipse'].includes(type);
 }
 
@@ -180,7 +181,7 @@ export function buildCocoKeypointsDocument(input: {
   documents: ExportAnnotationDocument[];
   versionName: string;
 }) {
-  const pointRecords = (annotations: AnnotationRecord[]) => annotations.flatMap((annotation) => annotation.geometry.type === 'keypoint' ? [{ ...annotation.geometry, label: annotation.label, visibility: 2 as const }] : annotation.geometry.type === 'skeleton' ? annotation.geometry.points.map((point) => ({ ...point, label: annotation.label })) : []);
+  const pointRecords = (annotations: AnnotationRecord[]) => annotations.flatMap((annotation) => annotation.geometry.type === 'keypoint' ? [{ ...annotation.geometry, label: annotation.label, visibility: annotation.geometry.visibility ?? 2 }] : annotation.geometry.type === 'skeleton' ? annotation.geometry.points.map((point) => ({ ...point, label: annotation.label })) : []);
   const documents = new Map(input.documents.map((document) => [document.imageId, pointRecords(document.annotations)]));
   const allPoints = input.documents.flatMap((document) => pointRecords(document.annotations));
   const keypointCount = Math.max(...allPoints.map((point) => point.index), 0);
@@ -328,6 +329,27 @@ export async function materializeDatasetFormat(input: DatasetExportInput, packag
     }
     const counts = Object.fromEntries(['train', 'val', 'test'].map((split) => [split, images.filter((image) => splitName(image.split) === split).length]));
     await writeFile(path.join(packageDir, 'dataset.yaml'), [`path: ${JSON.stringify(packageDir)}`, 'train: images/train', `val: images/${counts.val ? 'val' : 'train'}`, ...(counts.test ? ['test: images/test'] : []), `nc: ${classes.length}`, 'names:', ...classes.map((name, index) => `  ${index}: ${JSON.stringify(name)}`), ''].join('\n'));
+  } else if (input.format === 'YOLO_SEG') {
+    for (const split of ['train', 'val', 'test']) {
+      await mkdir(path.join(packageDir, 'images', split), { recursive: true });
+      await mkdir(path.join(packageDir, 'labels', split), { recursive: true });
+    }
+    for (const image of images) {
+      const split = splitName(image.split);
+      const labels = (documents.get(image.id) ?? []).flatMap((annotation) => {
+        const classId = classes.indexOf(annotation.label);
+        const points = pointsFor(annotation, 100, 100);
+        if (classId < 0 || points.length < 3) return [];
+        const coordinates = points.flatMap((point) => [point.x / 100, point.y / 100]);
+        if (coordinates.some((value) => !Number.isFinite(value) || value < 0 || value > 1)) return [];
+        return [`${classId} ${coordinates.map((value) => value.toFixed(8)).join(' ')}`];
+      });
+      const stem = path.parse(image.exportFilename).name;
+      await writeFile(path.join(packageDir, 'labels', split, `${stem}.txt`), `${labels.join('\n')}\n`);
+      if (input.includeImages) await copyFile(image.sourcePath, path.join(packageDir, 'images', split, image.exportFilename));
+    }
+    const counts = Object.fromEntries(['train', 'val', 'test'].map((split) => [split, images.filter((image) => splitName(image.split) === split).length]));
+    await writeFile(path.join(packageDir, 'dataset.yaml'), [`path: ${JSON.stringify(packageDir)}`, 'train: images/train', `val: images/${counts.val ? 'val' : 'train'}`, ...(counts.test ? ['test: images/test'] : []), `nc: ${classes.length}`, 'names:', ...classes.map((name, index) => `  ${index}: ${JSON.stringify(name)}`), ''].join('\n'));
   } else if (input.format === 'COCO' || input.format === 'COCO_SEGMENTATION') {
     await mkdir(path.join(packageDir, 'annotations'), { recursive: true });
     const coco = buildCocoDocument({ dataset: input.dataset, images, documents: selected.documents, scope: input.scope, versionName: input.versionName });
@@ -359,7 +381,7 @@ export async function materializeDatasetFormat(input: DatasetExportInput, packag
     for (const image of images) await writeFile(path.join(packageDir, 'masks', `${path.parse(image.exportFilename).name}.png`), renderSegmentationMask(image, documents.get(image.id) ?? [], classes));
   }
 
-  if (input.includeImages && input.format !== 'YOLO') {
+  if (input.includeImages && input.format !== 'YOLO' && input.format !== 'YOLO_SEG') {
     await mkdir(path.join(packageDir, 'images'), { recursive: true });
     await Promise.all(images.map((image) => copyFile(image.sourcePath, path.join(packageDir, 'images', image.exportFilename))));
   }

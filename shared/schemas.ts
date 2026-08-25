@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { annotationReviewDecisions, annotationTypes, conversionFormats, dataFormats, trainingDataFormats, trainingTypes, userRoles } from './contracts';
+import { annotationReviewDecisions, annotationTypes, architectureVariants, conversionFormats, dataFormats, trainingDataFormats, trainingTypes, userRoles } from './contracts';
 
 export const loginSchema = z.object({
   username: z.string().trim().min(3).max(64),
@@ -15,6 +15,7 @@ export const trainingDraftSchema = z.object({
   version: z.string().trim().min(1).max(40).default('v1'),
   datasetId: z.string().trim().min(1).max(80),
   model: z.string().trim().min(2).max(80),
+  architectureVariant: z.enum(architectureVariants).default('standard'),
   weightSource: z.enum(['pretrained', 'scratch']).default('pretrained'),
   epochs: z.number().int().min(1).max(5000),
   batchSize: z.number().int().min(1).max(512),
@@ -61,11 +62,12 @@ export const annotationRecordSchema = z.object({
   id: z.string().trim().min(1).max(80),
   label: z.string().trim().min(1).max(80),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  instanceId: z.string().trim().min(1).max(80).optional(),
   locked: z.boolean().optional(),
   geometry: z.discriminatedUnion('type', [
     z.object({ type: z.literal(annotationTypes[0]), x: z.number().min(0).max(100), y: z.number().min(0).max(100), width: z.number().positive().max(100), height: z.number().positive().max(100) }),
     z.object({ type: z.literal(annotationTypes[1]), points: z.array(pointSchema).min(3).max(10000) }),
-    z.object({ type: z.literal(annotationTypes[2]), x: z.number().min(0).max(100), y: z.number().min(0).max(100), index: z.number().int().positive() }),
+    z.object({ type: z.literal(annotationTypes[2]), x: z.number().min(0).max(100), y: z.number().min(0).max(100), index: z.number().int().positive(), visibility: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional() }),
     z.object({ type: z.literal(annotationTypes[3]), points: z.array(pointSchema).min(2).max(10000), strokeWidth: z.number().positive().max(20) }),
     z.object({ type: z.literal(annotationTypes[4]), cx: z.number().min(0).max(100), cy: z.number().min(0).max(100), rx: z.number().positive().max(100), ry: z.number().positive().max(100), rotation: z.number().min(-180).max(180) }),
     z.object({ type: z.literal(annotationTypes[5]), points: z.array(pointSchema.extend({ index: z.number().int().positive(), visibility: z.union([z.literal(0), z.literal(1), z.literal(2)]) })).min(1).max(1000), edges: z.array(z.tuple([z.number().int().positive(), z.number().int().positive()])).max(2000) }),

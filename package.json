@@ -17,7 +17,8 @@
     "test:server": "vitest run server",
     "db:migrate": "tsx server/migrate.ts",
     "db:seed": "tsx server/seedDatabase.ts",
-    "artifacts:cleanup": "tsx server/cleanupArtifacts.ts"
+    "artifacts:cleanup": "tsx server/cleanupArtifacts.ts",
+    "architecture:ppt": "python3 scripts/generate_architecture_ppt.py"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1093.0",

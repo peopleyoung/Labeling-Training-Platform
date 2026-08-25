@@ -37,6 +37,11 @@ describe('training standard-format adapters', () => {
         }
       }
 
+      const instanceOutput = path.join(artifactRoot, 'training', 'yolo-seg');
+      const instance = await prepareTrainingFormat({ artifactRoot, outputDir: instanceOutput, task: 'instance_segmentation', format: 'YOLO_SEG', model: 'yolov8m-seg', dataset, images: [image], documents: [{ imageId: image.id, annotations: [polygon] }] });
+      expect(instance).toMatchObject({ format: 'YOLO_SEG', imageCount: 1 });
+      expect(await readFile(path.join(instanceOutput, 'selected', 'labels', 'train', '000001-sample.txt'), 'utf8')).toMatch(/^0 /);
+
       for (const format of ['COCO_SEGMENTATION', 'PNG_MASK'] as const satisfies readonly DataFormat[]) {
         const outputDir = path.join(artifactRoot, 'training', format.toLowerCase());
         const prepared = await prepareTrainingFormat({ artifactRoot, outputDir, task: 'segmentation', format, dataset, images: [image], documents: [{ imageId: image.id, annotations: [polygon] }] });
@@ -52,6 +57,11 @@ describe('training standard-format adapters', () => {
       const manifest = JSON.parse(await readFile(prepared.configPath, 'utf8')) as { task: TrainingType; dataFormat: DataFormat; keypointCount: number; images: Array<{ annotations: AnnotationRecord[] }> };
       expect(manifest).toMatchObject({ task: 'keypoint', dataFormat: 'COCO_KEYPOINTS', keypointCount: 2 });
       expect(manifest.images[0].annotations).toHaveLength(2);
+
+      const poseOutput = path.join(artifactRoot, 'training', 'yolo-pose');
+      const pose = await prepareTrainingFormat({ artifactRoot, outputDir: poseOutput, task: 'keypoint', format: 'COCO_KEYPOINTS', model: 'yolov8m-pose', dataset: { ...dataset, classes: ['left', 'right'] }, images: [image], documents: [{ imageId: image.id, annotations: [...keypoints, { id: 'box-1', label: 'object', color: '#2383f2', geometry: { type: 'rectangle', x: 10, y: 10, width: 80, height: 80 } }] }] });
+      expect(pose).toMatchObject({ format: 'COCO_KEYPOINTS', imageCount: 1 });
+      expect(await readFile(path.join(poseOutput, 'native', 'labels', 'train', 'image-1-000001-sample.txt'), 'utf8')).toMatch(/^0 /);
 
       const sdxlOutput = path.join(artifactRoot, 'training', 'image-folder');
       const sdxl = await prepareTrainingFormat({ artifactRoot, outputDir: sdxlOutput, task: 'sdxl', format: 'IMAGE_FOLDER', dataset, images: [image], documents: [{ imageId: image.id, annotations: [], captions: [{ id: 'caption-1', text: 'a scratched metal surface', language: 'en', primary: true, source: 'human' }], imageAttributes: { includeInSdxl: true, tags: ['scratch', 'metal'], crop: { x: 5, y: 10, width: 80, height: 70 } } }] });
