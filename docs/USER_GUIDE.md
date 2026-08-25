@@ -282,6 +282,52 @@ SegFormer、U-Net、DeepLabV3+、HRNet 和 HigherHRNet 可选择预训练权重�
 
 MobileNetV2 RK 训练输入固定为 RGB stretch，并使用 `(pixel - 127.5) / 127.5` 归一化。训练器只在计算损失和 mIoU 时临时将 logits 双线性插值到标签尺寸；TorchScript/ONNX 产物保持低分辨率 logits，部署端必须按相同契约完成插值和 argmax。
 
+#### MobileNetV2 RK 训练配置
+
+在训练向导中使用以下配置：
+
+| 配置项 | 选择或要求 |
+| --- | --- |
+| 任务类型 | 语义分割 |
+| 数据格式 | COCO Segmentation 或 PNG Mask |
+| 基础模型 | DeepLabV3+ MobileNetV2 · RK 友好 |
+| 架构变体 | RK 友好结构；选择上述模型后会自动设置 |
+| 权重来源 | 官方预训练权重或从头训练 |
+| 输入尺寸 | 固定尺寸，建议使用 8 的倍数；默认 512 |
+| 批次 | 可使用 batch 1；训练器会冻结 BatchNorm 的运行统计 |
+
+训练数据必须已完成审核，并至少包含一张位于训练分片、具有有效矩形或多边形分割标注的图片。选择官方预训练权重时，Worker 会优先使用持久化模型缓存；离线模式下缓存缺失会让任务明确失败，不会静默改为随机初始化。
+
+训练器默认使用随机种子 42，以最低验证 Loss 保存 `best.pth`，再从该 checkpoint 生成最终 `model.torchscript.pt`。模型仓库登记的是训练向导中填写的模型名称和版本。
+
+#### 训练产物契约
+
+成功任务的 `manifest.json` 是后续转换和部署的权威输入。MobileNetV2 RK 产物包含以下关键约束：
+
+| 字段 | 含义 |
+| --- | --- |
+| `architectureVariant` | `rk_compatible` |
+| `targetFamily` | `rockchip_npu` |
+| `outputProtocol` | `segmentation_logits` |
+| `inputShape` | 静态 NCHW：`[1, 3, H, W]` |
+| `outputShape` | 低分辨率 NCHW：`[1, 类别数, ceil(H/8), ceil(W/8)]`；类别数包含 background |
+| `outputStride` | `8` |
+| `preprocessing` | RGB、stretch、`(pixel - 127.5) / 127.5` |
+
+部署后处理应先对每个类别的 logits 做双线性插值，再执行 `argmax` 生成类别掩码。不得把低分辨率 logits 直接当作原图尺寸掩码，也不得再次执行 ImageNet mean/std 归一化。
+
+#### 当前部署边界
+
+本平台当前完成的是 RK 友好训练结构、TorchScript 产物和静态 ONNX 转换约束。`rk_structure_ready` 只表示图结构已经按 RK3588-Plaform 的 DeepLabV3 MobileNetV2 路径适配，不表示已经完成以下工作：
+
+- 生成 `.rknn` 文件
+- 使用 RKNN Toolkit2 进行 FP16 或 INT8 构建
+- 准备 INT8 校准集
+- 在 RK3588 NPU 上初始化 runtime 并执行推理
+- 检查算子 CPU fallback、精度变化和板端性能
+
+交付到 RK3588 前，仍需在匹配版本的 RKNN Toolkit2 环境中根据 `manifest.json` 转换 ONNX，并在目标板上完成输出形状、预处理、后处理、精度和性能验证。只有完成实机验证后，模型状态才可以从“RK 结构已就绪”提升为“设备已验证”。
+
 ### 8.5 CPU 与 GPU 训练
 
 CPU 模式：
