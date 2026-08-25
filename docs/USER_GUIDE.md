@@ -275,10 +275,12 @@ SegFormer、U-Net、DeepLabV3+、HRNet 和 HigherHRNet 可选择预训练权重�
 模型向导会显示“通用结构”或“RK 友好结构”：
 
 - YOLOv5u、YOLOv8、YOLOv8-Seg、YOLOv8-Pose 标记为适用 RK。
-- DeepLabV3+ MobileNetV2 提供通用结构和独立的 MobileNetV2 RK 结构。
+- DeepLabV3+ MobileNetV2 提供通用结构和独立的 MobileNetV2 RK 结构。RK 结构沿用产品模型 ID，实际部署图按 RK3588-Plaform 构造为 `smp.DeepLabV3`：MobileNetV2 尾部为 320 通道，输出 stride 为 8，不包含全尺寸上采样。
 - SegFormer、U-Net、DeepLabV3+ 其他主干、HRNet 和 HigherHRNet 使用通用结构。
 
 “适用 RK”表示网络和 ONNX 导出约束面向 Rockchip NPU 工具链设计，不代表平台直接生成 RKNN，也不代表已经在每一种目标设备上完成性能验证。
+
+MobileNetV2 RK 训练输入固定为 RGB stretch，并使用 `(pixel - 127.5) / 127.5` 归一化。训练器只在计算损失和 mIoU 时临时将 logits 双线性插值到标签尺寸；TorchScript/ONNX 产物保持低分辨率 logits，部署端必须按相同契约完成插值和 argmax。
 
 ### 8.5 CPU 与 GPU 训练
 

@@ -404,12 +404,17 @@ persisted annotations + explicit weightSource -> versioned manifest
 - `ModelVariantMetadata = { architectureVariant, targetFamily?, rkCompatibilityStatus, outputProtocol, supportedOpset? }` is owned by `shared/modelCatalog.ts`.
 - `model_versions` persists `architecture_variant`, `target_family`, `rk_compatibility_status`, and `output_protocol` through migration `010_model_architecture_variants.sql`.
 - RK-friendly conversion invokes `forge_worker.convert onnx` with a fixed `--input-shape`, `--opset 12|13`, `--architecture-variant rk_compatible`, and no dynamic batch.
+- RK segmentation construction is `build_segmentation_model('deeplabv3plus-mobilenetv2-rk', classes, weight_source, image_size)`; `image_size` fixes the decoder pooling kernel and deployment output shape.
 - Output protocols are `segmentation_logits | yolo_detection | yolo_segmentation | yolo_pose | heatmap | sdxl_unet`.
 
 ### 3. Contracts
 
 - The model catalog is the source of truth for supported variants and their RK readiness. API, UI and Worker must import or derive from that catalog instead of maintaining independent compatibility lists.
 - DeepLabV3+ exposes separate MobileNetV2 variants: `deeplabv3plus-mobilenetv2` is the standard backbone and `deeplabv3plus-mobilenetv2-rk` is the RK-specific backbone. The `-rk` model id always requires `architectureVariant='rk_compatible'`.
+- The RK model id is retained for product compatibility, but its graph must match RK3588-Plaform's `mobilenet_v2_rknn` implementation: `smp.DeepLabV3`, encoder output stride 8, MobileNetV2's final 1280-channel classification projection removed, and the last encoder output fixed at 320 channels.
+- The RK decoder contains only the full-image average-pooling projection, a direct 1x1 projection, and the 512-to-256 concat projection. Do not add a low-level skip, dilated ASPP branches, a Plus decoder block, or full-resolution output interpolation to the deployment model.
+- RK training images use RGB stretch plus `(pixel - 127.5) / 127.5`; masks use nearest-neighbor resize. Training and metrics may bilinearly resize deployment logits to the mask size with `align_corners=False`, but exported TorchScript/ONNX must preserve stride-8 logits.
+- Batch size 1 training freezes BatchNorm, random initialization uses seed 42 by default, and the exported model reloads the checkpoint with the lowest validation loss.
 - YOLOv5u, YOLOv8, YOLOv8-Seg and YOLOv8-Pose may use the RK-friendly path. `YOLO_SEG` preserves per-instance polygons through `AnnotationRecord.instanceId`; COCO keypoints preserve optional visibility `0 | 1 | 2`.
 - A standard-only catalog model must reject `rk_compatible`. Selecting `standard` must persist `standard_only` and must not inherit the catalog's RK badge accidentally.
 - Successful training copies the selected architecture variant into `model_versions`; conversion reads the persisted model value rather than guessing from a display name.
@@ -425,12 +430,13 @@ persisted annotations + explicit weightSource -> versioned manifest
 - RK-friendly ONNX with dynamic batch, batch other than 1, or opset outside 12/13 -> Worker configuration failure and no conversion artifact.
 - Missing instance polygons for a YOLO-Seg train split -> training preparation failure and no model registration.
 - Missing positive keypoint indices for YOLO-Pose -> training preparation failure and no model registration.
+- An SMP MobileNetV2 encoder without 19 original feature blocks, a final index of 18, a 1280-channel final output, or a 320-channel final projection input -> explicit executor failure; do not silently build a different graph after a dependency upgrade.
 
 ### 5. Good/Base/Bad Cases
 
-- Good: train `deeplabv3plus-mobilenetv2-rk` with `rk_compatible`, persist `rockchip_npu` plus `segmentation_logits`, then export static batch-1 opset-13 ONNX with metadata.
+- Good: train `deeplabv3plus-mobilenetv2-rk` with `rk_compatible` and `[-1, 1]` RGB inputs, persist stride-8 `segmentation_logits`, then export static batch-1 opset-13 ONNX with metadata.
 - Base: train standard MobileNetV2, persist `standard_only`, then export a normal ONNX without an RK compatibility claim.
-- Bad: train the standard backbone but change only the model badge to RK-friendly, allow dynamic RK ONNX, embed unsupported post-processing, or name an ONNX file `.rknn`.
+- Bad: train the standard backbone but change only the model badge to RK-friendly, retain the 1280-channel MobileNet projection, use ImageNet mean/std, embed full-resolution resize, allow dynamic RK ONNX, or name an ONNX file `.rknn`.
 
 ### 6. Tests Required
 
@@ -438,6 +444,8 @@ persisted annotations + explicit weightSource -> versioned manifest
 - Migration smoke asserts the new task/format constraints and all four model lineage columns.
 - Dataset tests assert YOLO-Seg instance grouping and YOLO-Pose visibility/index handling.
 - Worker command smoke asserts YOLO-Seg, YOLO-Pose and both MobileNetV2 variants route to their intended trainers.
+- RK segmentation unit tests assert output `(1, classes, image_size/8, image_size/8)`, encoder stride 8, 18 MobileNet feature blocks, 320 final channels, static image-pool kernel, and absence of Plus decoder blocks. A data test asserts pixel values 0/255 map to -1/1.
+- RK acceptance runs one real epoch, reloads the best checkpoint, loads TorchScript, exports ONNX, and compares ONNX Runtime output numerically with the stride-8 TorchScript output. The standard MobileNetV2 acceptance must continue to produce full-resolution logits.
 - Conversion smoke asserts RK-friendly ONNX uses static batch 1 and opset 12/13, passes `onnx.checker`, and contains architecture, target-family, input-shape and output-protocol metadata.
 - Frontend tests assert the five task cards, standard/RK model labels, disabled invalid architecture choices, and RK conversion controls.
 
@@ -464,4 +472,14 @@ await runConversion({
   opset: 13,
   dynamicBatch: false,
 });
+```
+
+```py
+# Wrong: the old Forge-specific approximation is not the RK3588 profile.
+return SegmentationOutput(DeepLabV3Plus(classes, model_name, pretrained), "tensor")
+
+# Correct: preserve low-resolution deployment logits from the reviewed RK graph.
+return build_segmentation_model(
+    "deeplabv3plus-mobilenetv2-rk", classes, weight_source, image_size
+)
 ```

@@ -15,8 +15,10 @@ import onnxruntime as ort
 import torch
 from PIL import Image, ImageDraw
 
+from .vision_models import RK_SEGMENTATION_MODEL
 
-DEFAULT_MODELS = ["segformer-b0", "unet", "deeplabv3plus-resnet50", "deeplabv3plus-mobilenetv2", "deeplabv3plus-mobilenetv2-rk", "deeplabv3plus-mobilenetv3-large", "hrnet-w32", "higherhrnet-w32"]
+
+DEFAULT_MODELS = ["segformer-b0", "unet", "deeplabv3plus-resnet50", "deeplabv3plus-mobilenetv2", RK_SEGMENTATION_MODEL, "deeplabv3plus-mobilenetv3-large", "hrnet-w32", "higherhrnet-w32"]
 
 
 def task_for(model: str) -> str:
@@ -61,9 +63,13 @@ def verify_model(model_name: str, root: Path, environment: dict[str, str], all_c
     artifact = output_dir / "model.torchscript.pt"
     loaded = torch.jit.load(str(artifact), map_location="cpu").eval()
     prediction = loaded(torch.randn(1, 3, 128, 128))
-    if prediction.shape[0] != 1 or tuple(prediction.shape[-2:]) != (128, 128):
+    expected_output_size = (16, 16) if model_name == RK_SEGMENTATION_MODEL else (128, 128)
+    if prediction.shape[0] != 1 or tuple(prediction.shape[-2:]) != expected_output_size:
         raise RuntimeError(f"Unexpected {model_name} output shape: {tuple(prediction.shape)}")
-    if torch.allclose(loaded(torch.zeros(1, 3, 128, 128)), loaded(torch.ones(1, 3, 128, 128)), atol=1e-6, rtol=1e-5):
+    zeros = loaded(torch.zeros(1, 3, 128, 128))
+    ones = loaded(torch.ones(1, 3, 128, 128))
+    input_independent = torch.equal(zeros, ones) if model_name == RK_SEGMENTATION_MODEL else torch.allclose(zeros, ones, atol=1e-6, rtol=1e-5)
+    if input_independent:
         raise RuntimeError(f"TorchScript {model_name} output does not depend on its input")
     conversion_dir = root / f"{model_name}-onnx"
     run([sys.executable, "-m", "forge_worker.convert", "onnx", "--source", str(artifact), "--output-dir", str(conversion_dir), "--precision", "FP32", "--model-family", model_name.split("-")[0], "--architecture-variant", architecture_variant, "--device", "cpu", "--input-shape", "1,3,128,128", "--opset", "13" if architecture_variant == "rk_compatible" else "18"], environment)
@@ -78,7 +84,8 @@ def verify_model(model_name: str, root: Path, environment: dict[str, str], all_c
         raise RuntimeError(f"ONNX {model_name} differs from TorchScript; max abs difference={difference}")
     zeros = session.run(None, {input_name: np.zeros((1, 3, 128, 128), dtype=np.float32)})[0]
     ones = session.run(None, {input_name: np.ones((1, 3, 128, 128), dtype=np.float32)})[0]
-    if np.allclose(zeros, ones, atol=1e-6, rtol=1e-5):
+    input_independent = np.array_equal(zeros, ones) if model_name == RK_SEGMENTATION_MODEL else np.allclose(zeros, ones, atol=1e-6, rtol=1e-5)
+    if input_independent:
         raise RuntimeError(f"ONNX {model_name} output does not depend on its input")
     if all_cpu_formats:
         torchscript_dir = root / f"{model_name}-torchscript"

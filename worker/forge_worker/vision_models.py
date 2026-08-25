@@ -1,13 +1,16 @@
 import os
 import re
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 from .pretrained import configure_model_cache, explain_pretrained_failure, local_hrnet_checkpoint, segformer_source, timm_hrnet_source
+
+
+RK_SEGMENTATION_MODEL = "deeplabv3plus-mobilenetv2-rk"
 
 
 def load_local_segformer_backbone(model: nn.Module, checkpoint_path: Path) -> int:
@@ -158,31 +161,17 @@ class ASPP(nn.Module):
 class DeepLabV3Plus(nn.Module):
     def __init__(self, classes: int, backbone_name: str, pretrained: bool):
         super().__init__()
-        self.rockchip_variant = backbone_name.endswith("-rk")
         if "mobilenetv2" in backbone_name or "mobilenetv3" in backbone_name:
             from torchvision.models import MobileNet_V2_Weights, MobileNet_V3_Large_Weights, mobilenet_v2, mobilenet_v3_large
             is_v3 = "mobilenetv3" in backbone_name
             backbone = mobilenet_v3_large(weights=MobileNet_V3_Large_Weights.IMAGENET1K_V2 if pretrained else None) if is_v3 else mobilenet_v2(weights=MobileNet_V2_Weights.IMAGENET1K_V1 if pretrained else None)
-            # The standard variant keeps the native MobileNetV2 feature stride.
-            # The RK-friendly variant exposes an explicit feature pyramid,
-            # ReLU6 activations and a narrow 1x1 projection that maps cleanly to
-            # Rockchip NPU convolution/resize operators.
-            if self.rockchip_variant:
-                self.low_encoder = nn.Sequential(*list(backbone.features[:4]))
-                self.high_encoder = nn.Sequential(*list(backbone.features[4:14]))
-                self.tail_encoder = nn.Sequential(*list(backbone.features[14:]))
-                self.high_projection = nn.Sequential(nn.Conv2d(1280, 256, 1, bias=False), nn.BatchNorm2d(256), nn.ReLU6(inplace=True))
-                self.low_projection = nn.Sequential(nn.Conv2d(24, 48, 1, bias=False), nn.BatchNorm2d(48), nn.ReLU6(inplace=True))
-                self.aspp = ASPP(256, 128)
-                self.decoder = nn.Sequential(DoubleConv(128 + 48, 128), nn.Conv2d(128, classes, 1))
-            else:
-                self.low_encoder = nn.Sequential(*list(backbone.features[:4]))
-                self.high_encoder = nn.Sequential(*list(backbone.features[4:]))
-                low_channels = 24 if is_v3 else 24
-                high_channels = 960 if is_v3 else 1280
-                self.low_projection = nn.Sequential(nn.Conv2d(low_channels, 48, 1, bias=False), nn.BatchNorm2d(48), nn.ReLU(inplace=True))
-                self.aspp = ASPP(high_channels, 256)
-                self.decoder = nn.Sequential(DoubleConv(256 + 48, 256), nn.Conv2d(256, classes, 1))
+            self.low_encoder = nn.Sequential(*list(backbone.features[:4]))
+            self.high_encoder = nn.Sequential(*list(backbone.features[4:]))
+            low_channels = 24
+            high_channels = 960 if is_v3 else 1280
+            self.low_projection = nn.Sequential(nn.Conv2d(low_channels, 48, 1, bias=False), nn.BatchNorm2d(48), nn.ReLU(inplace=True))
+            self.aspp = ASPP(high_channels, 256)
+            self.decoder = nn.Sequential(DoubleConv(256 + 48, 256), nn.Conv2d(256, classes, 1))
             return
         from torchvision.models import ResNet50_Weights, ResNet101_Weights, resnet50, resnet101
         if "101" in backbone_name:
@@ -199,11 +188,8 @@ class DeepLabV3Plus(nn.Module):
         if hasattr(self, "low_encoder"):
             low = self.low_encoder(inputs)
             features = self.high_encoder(low)
-            if hasattr(self, "tail_encoder"):
-                features = self.tail_encoder(features)
-                features = self.high_projection(features)
             high = self.aspp(features)
-            high = F.interpolate(high, size=low.shape[-2:], mode="nearest" if self.rockchip_variant else "bilinear", align_corners=None if self.rockchip_variant else False)
+            high = F.interpolate(high, size=low.shape[-2:], mode="bilinear", align_corners=False)
             return self.decoder(torch.cat((high, self.low_projection(low)), dim=1))
         features = self.stem(inputs)
         low = self.layer1(features)
@@ -212,7 +198,83 @@ class DeepLabV3Plus(nn.Module):
         return self.decoder(torch.cat((high, self.low_projection(low)), dim=1))
 
 
-def build_segmentation_model(model_name: str, classes: int, weight_source: str = "scratch") -> nn.Module:
+def _remove_mobilenet_v2_classification_projection(model: Any) -> None:
+    encoder = model.encoder
+    features = getattr(encoder, "features", None)
+    out_indexes = getattr(encoder, "_out_indexes", None)
+    out_channels = getattr(encoder, "_out_channels", None)
+    if (
+        features is None
+        or len(features) != 19
+        or not isinstance(out_indexes, list)
+        or out_indexes[-1] != 18
+        or not isinstance(out_channels, list)
+        or out_channels[-1] != 1280
+    ):
+        raise RuntimeError("Unsupported segmentation-models-pytorch MobileNetV2 encoder layout")
+
+    final_conv = features[-1][0]
+    if getattr(final_conv, "in_channels", None) != 320:
+        raise RuntimeError("MobileNetV2 classification projection does not consume 320 channels")
+
+    encoder.features = features[:-1]
+    encoder._out_indexes = [*out_indexes[:-1], len(encoder.features) - 1]
+    encoder._out_channels = [*out_channels[:-1], 320]
+
+
+def _build_official_rknn_mobilenet_v2(classes: int, image_size: int, pretrained: bool) -> nn.Module:
+    import segmentation_models_pytorch as smp
+
+    feature_size = (image_size + 7) // 8
+    model = smp.DeepLabV3(
+        encoder_name="mobilenet_v2",
+        encoder_weights="imagenet" if pretrained else None,
+        encoder_output_stride=8,
+        decoder_channels=256,
+        in_channels=3,
+        classes=classes,
+        upsampling=1,
+    )
+    _remove_mobilenet_v2_classification_projection(model)
+
+    class OfficialRknnDecoder(nn.Module):
+        def __init__(self, input_channels: int):
+            super().__init__()
+            self.image_pool = nn.AvgPool2d(
+                kernel_size=(feature_size, feature_size),
+                stride=(feature_size, feature_size),
+            )
+            self.image_projection = self._projection(input_channels, 256)
+            self.aspp_projection = self._projection(input_channels, 256)
+            self.concat_projection = self._projection(512, 256)
+
+        @staticmethod
+        def _projection(input_channels: int, output_channels: int) -> nn.Sequential:
+            return nn.Sequential(
+                nn.Conv2d(input_channels, output_channels, kernel_size=1, bias=False),
+                nn.BatchNorm2d(output_channels),
+                nn.ReLU(),
+            )
+
+        def forward(self, features: List[torch.Tensor]) -> torch.Tensor:
+            encoder_output = features[-1]
+            image_feature = self.image_projection(self.image_pool(encoder_output))
+            image_feature = F.interpolate(
+                image_feature,
+                scale_factor=(feature_size, feature_size),
+                mode="bilinear",
+                align_corners=True,
+            )
+            aspp_feature = self.aspp_projection(encoder_output)
+            return self.concat_projection(torch.cat((image_feature, aspp_feature), dim=1))
+
+    decoder = OfficialRknnDecoder(model.encoder.out_channels[-1])
+    smp.base.initialization.initialize_decoder(decoder)
+    model.decoder = decoder
+    return model
+
+
+def build_segmentation_model(model_name: str, classes: int, weight_source: str = "scratch", image_size: int = 512) -> nn.Module:
     pretrained = weight_source == "pretrained"
     configure_model_cache()
     if model_name.startswith("segformer"):
@@ -240,6 +302,13 @@ def build_segmentation_model(model_name: str, classes: int, weight_source: str =
             config = SegformerConfig(num_labels=classes, depths=depth_map.get(variant, depth_map["b0"]), hidden_sizes=hidden_sizes, decoder_hidden_size=256)
             model = SegformerForSemanticSegmentation(config)
         return SegmentationOutput(model, "segformer")
+    if model_name == RK_SEGMENTATION_MODEL:
+        try:
+            return _build_official_rknn_mobilenet_v2(classes, image_size, pretrained)
+        except Exception as error:
+            if pretrained:
+                raise explain_pretrained_failure(model_name, error) from error
+            raise
     if model_name.startswith("deeplabv3plus"):
         try:
             return SegmentationOutput(DeepLabV3Plus(classes, model_name, pretrained), "tensor")

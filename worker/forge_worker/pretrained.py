@@ -77,7 +77,9 @@ def pretrained_source(model_name: str) -> str:
         return "torchvision/resnet101/IMAGENET1K_V2"
     if model_name == "deeplabv3plus-resnet50":
         return "torchvision/resnet50/IMAGENET1K_V2"
-    if model_name in {"deeplabv3plus-mobilenetv2", "deeplabv3plus-mobilenetv2-rk"}:
+    if model_name == "deeplabv3plus-mobilenetv2-rk":
+        return "smp-hub/mobilenet_v2.imagenet"
+    if model_name == "deeplabv3plus-mobilenetv2":
         return "torchvision/mobilenet_v2/IMAGENET1K_V1"
     if model_name == "deeplabv3plus-mobilenetv3-large":
         return "torchvision/mobilenet_v3_large/IMAGENET1K_V2"
