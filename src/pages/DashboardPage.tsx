@@ -59,7 +59,7 @@ function formatActivityTime(createdAt: string) {
 }
 
 export function DashboardPage() {
-  const { datasets, jobs, models, activities, gpuEnabled, cpuTrainingEnabled, cpuOnnxEnabled } = useApp();
+  const { datasets, jobs, models, activities, annotationStatistics, gpuEnabled, cpuTrainingEnabled, cpuOnnxEnabled } = useApp();
   const runningJobs = jobs.filter((job) => job.status === 'running').length;
   const queuedJobs = jobs.filter((job) => job.status === 'queued').length;
   const reviewDatasets = datasets.filter((dataset) => dataset.status === '待审核').length;
@@ -75,6 +75,8 @@ export function DashboardPage() {
         <article className="stat-item"><span className="stat-icon violet"><Boxes size={20} /></span><div><small>模型版本</small><strong>{models.length}</strong><span><b>{candidateModels}</b> 个生产候选</span></div></article>
         <article className="stat-item"><span className="stat-icon green"><Cpu size={20} /></span><div><small>计算 Worker</small><strong>{gpuEnabled ? 'GPU' : cpuTrainingEnabled ? 'CPU' : '未启用'}</strong><span>{gpuEnabled ? '全格式训练和转换' : cpuOnnxEnabled ? 'CPU 训练与模型转换' : '仅数据处理'}</span></div></article>
       </section>
+
+      {annotationStatistics && <section className="panel annotation-statistics-panel"><header className="section-header"><div><h2>标注与审核统计</h2><p>按最终有效结果统计，审核员修改单独计量</p></div></header><dl className="config-grid"><div><dt>标注员创建对象</dt><dd>{annotationStatistics.annotatorCreatedObjects}</dd></div><div><dt>最终有效对象</dt><dd>{annotationStatistics.finalEffectiveObjects}</dd></div><div><dt>完成帧数</dt><dd>{annotationStatistics.completedFrames}</dd></div><div><dt>完成 Job</dt><dd>{annotationStatistics.completedJobs}</dd></div><div><dt>审核新增</dt><dd>{annotationStatistics.reviewerAddedObjects}</dd></div><div><dt>审核修改</dt><dd>{annotationStatistics.reviewerModifiedObjects}</dd></div><div><dt>审核删除</dt><dd>{annotationStatistics.reviewerDeletedObjects}</dd></div><div><dt>通过 / 退回 Job</dt><dd>{annotationStatistics.approvedJobs} / {annotationStatistics.rejectedJobs}</dd></div></dl></section>}
 
       <div className="dashboard-layout">
         <section className="panel training-overview">

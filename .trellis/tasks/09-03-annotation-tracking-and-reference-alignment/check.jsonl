@@ -1,0 +1,5 @@
+{"file": "src/components/annotation/annotationTracks.test.ts", "reason": "轨迹插值、拓扑冲突和关键帧方向测试"}
+{"file": "src/pages/AnnotationPage.test.tsx", "reason": "工作台追踪、跨帧复制、标签和按钮交互测试"}
+{"file": "server/api.test.ts", "reason": "接口保存读取及审核员归属审计测试"}
+{"file": "server/annotationTrackingSchema.test.ts", "reason": "轨迹字段 schema 保留测试"}
+{"file": "package.json", "reason": "类型检查、测试、构建和端到端验证命令"}

@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import { describe, expect, it } from 'vitest';
 import type { AnnotationRecord } from '../shared/contracts';
-import { buildCocoDocument, buildVocXml, createDatasetExport, renderSegmentationMask, selectAnnotatedExportData, type DimensionedExportImage } from './datasetExport';
+import { buildCocoDocument, buildCvatJson, buildCvatXml, buildVocXml, createDatasetExport, renderSegmentationMask, selectAnnotatedExportData, type DimensionedExportImage } from './datasetExport';
+import { convertCvatPayload, parseCvatXml, validateCvatPayload } from './cvatExchange';
 
 const image: DimensionedExportImage = { id: 'image-1', objectKey: 'datasets/1/image.png', filename: 'image.png', exportFilename: '000001-image.png', mimeType: 'image/png', width: 200, height: 100, split: 'train', sourcePath: '/data/artifacts/datasets/1/image.png' };
 const annotations: AnnotationRecord[] = [
@@ -13,6 +14,27 @@ const annotations: AnnotationRecord[] = [
 ];
 
 describe('dataset format exporters', () => {
+  it('blocks CVAT imports until unknown labels are mapped', () => {
+    const payload = { images: [{ shapes: [{ type: 'rectangle', label: 'unknown', points: [1, 2, 3, 4] }] }] };
+    expect(validateCvatPayload(payload, ['scratch']).valid).toBe(false);
+    expect(validateCvatPayload(payload, ['scratch']).errors[0].path).toBe('labelMapping.unknown');
+    expect(validateCvatPayload(payload, ['scratch'], { unknown: 'scratch' }).valid).toBe(true);
+  });
+
+  it('converts CVAT shapes into platform percentage geometry', () => {
+    const result = convertCvatPayload({ images: [{ name: 'image.png', width: 200, height: 100, shapes: [{ type: 'rectangle', label: 'scratch', points: [20, 20, 80, 60] }] }] }, [{ id: 'image-1', datasetId: 'dataset-1', filename: 'image.png', mimeType: 'image/png', split: 'train', width: 200, height: 100, sizeBytes: 10, createdAt: new Date().toISOString() }], ['scratch']);
+    expect(result.validation.valid).toBe(true);
+    expect(result.documents[0].annotations[0].geometry).toMatchObject({ type: 'rectangle', x: 10, y: 20, width: 30, height: 40 });
+    expect(parseCvatXml('<?xml version="1.0"?><annotations><image id="0" name="image.png" width="200" height="100"><box label="scratch" xtl="20" ytl="20" xbr="80" ybr="60"/></image></annotations>').images[0].shapes[0]).toMatchObject({ type: 'rectangle', label: 'scratch' });
+  });
+  it('builds CVAT JSON and XML with frame metadata and escaped labels', () => {
+    const frame = { ...image, sourceAssetId: 'video-1', sourceFrameNumber: 42, sourceTimestampMs: 1400 };
+    const cvatJson = buildCvatJson({ dataset: { id: 'dataset-1', name: 'Defects', version: 'v1', classes: ['scratch & dent'] }, images: [frame], documents: [{ imageId: frame.id, annotations: [{ ...annotations[0], label: 'scratch & dent' }] }], versionName: 'release-1' });
+    expect(cvatJson.version).toBe('1.1');
+    expect(cvatJson.images[0]).toMatchObject({ frame: 42, source_asset_id: 'video-1', source_timestamp_ms: 1400 });
+    expect(cvatJson.images[0].shapes[0]).toMatchObject({ label: 'scratch & dent', frame: 42 });
+    expect(buildCvatXml({ dataset: { id: 'dataset-1', name: 'Defects & QA', version: 'v1', classes: ['scratch & dent'] }, images: [frame], documents: [{ imageId: frame.id, annotations }] })).toContain('scratch &amp; dent');
+  });
   it('builds pixel-based COCO categories, boxes, and polygon segmentation', () => {
     const coco = buildCocoDocument({ dataset: { id: 'dataset-1', name: 'Defects', version: 'v1', classes: ['scratch', 'dent'] }, images: [image], documents: [{ imageId: image.id, annotations }], scope: 'train', versionName: 'release-1' });
     expect(coco.images[0]).toMatchObject({ width: 200, height: 100, file_name: image.exportFilename });
@@ -46,6 +68,15 @@ describe('dataset format exporters', () => {
     expect(selected.images.map((item) => item.id)).toEqual([image.id]);
     expect(selected.documents.map((document) => document.imageId)).toEqual([image.id]);
     expect(selected.excludedImageCount).toBe(1);
+  });
+
+  it('includes approved empty images when exporting an explicit Job scope', () => {
+    const emptyImage = { ...image, id: 'image-2', filename: 'empty.png' };
+    const selected = selectAnnotatedExportData([image, emptyImage], [{ imageId: image.id, annotations }, { imageId: emptyImage.id, annotations: [] }], true);
+
+    expect(selected.images.map((item) => item.id)).toEqual([image.id, emptyImage.id]);
+    expect(selected.documents).toHaveLength(2);
+    expect(selected.excludedImageCount).toBe(0);
   });
 
   it('rejects an export when the selected scope has no annotated images', async () => {

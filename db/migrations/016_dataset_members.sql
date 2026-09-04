@@ -1,0 +1,2 @@
+ALTER TABLE datasets ADD COLUMN IF NOT EXISTS annotator_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE datasets ADD COLUMN IF NOT EXISTS reviewer_ids JSONB NOT NULL DEFAULT '[]'::jsonb;

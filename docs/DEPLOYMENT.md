@@ -1,522 +1,345 @@
-# 工业视觉训练平台部署说明
+# Forge AI 部署说明
 
-本文档说明当前项目的部署结构、环境准备、启动方式、模型准备、数据持久化和日常运维。系统面向企业内网的单租户一体化部署，默认在一台 Linux 服务器上通过 Docker Compose 运行。
+本文面向企业内网、单工作空间的 Docker Compose 部署。默认 CPU-only 模式启动 Web、API、PostgreSQL、Redis、MinIO、导出 Worker 和 CPU 计算 Worker；具备 NVIDIA GPU 的主机可额外启用 GPU Worker。浏览器访问 Web，Web 在构建时写入 API 地址，API 将任务写入 Redis，Worker 将任务状态和产物元数据写回 PostgreSQL。
 
-## 1. 部署结构
+## 1. 部署前检查
 
-系统由以下容器组成：
-
-| 服务 | Compose 服务名 | 作用 | 默认对外端口 |
-| --- | --- | --- | --- |
-| Web | `web` | 前端页面 | `5174` |
-| API | `api` | 认证、数据、标注、训练和转换接口 | `4000` |
-| PostgreSQL | `postgres` | 业务数据和任务状态 | 仅容器网络 |
-| Redis | `redis` | 训练、导出和转换任务队列 | 仅容器网络 |
-| MinIO | `minio` | 对象存储基础服务 | S3 端口仅容器网络，控制台默认 `127.0.0.1:19001` |
-| 导出 Worker | `export-worker` | 数据集导出 | 无 |
-| CPU Worker | `cpu-worker` | CPU 训练及 CPU 模型转换 | 无 |
-| GPU Worker | `worker` | GPU 训练及 GPU 模型转换 | 无，按 `gpu` profile 启动 |
-
-当前业务图片、导出包、训练产物、模型和转换产物保存在 `forge-worker-data` Docker 卷的 `/data/artifacts` 下。模型缓存位于同一卷的 `/data/model-cache`。MinIO 作为当前部署组成部分运行，但业务产物不直接写入 MinIO，因此备份时必须同时备份 PostgreSQL、`forge-worker-data` 和 MinIO 数据卷。
-
-## 2. 运行条件
-
-### 2.1 通用条件
-
-- 64 位 Linux 服务器
-- Docker Engine 24 或更高版本
-- Docker Compose v2
-- 可访问项目依赖源，或已准备内部 npm、PyPI、PyTorch 和模型缓存
-- 建议至少 8 个 CPU 核心、16 GB 内存和 100 GB 可用磁盘空间
-- GPU 训练建议额外预留模型权重、训练数据、中间检查点和转换产物所需空间
-
-检查 Docker：
+目标主机需要 Linux x86_64、Docker Engine 和 Docker Compose v2；CPU-only 模式不要求显卡、NVIDIA 驱动或 CUDA。CPU Worker 镜像会安装 CPU 版 PyTorch、Ultralytics、ONNX 和 OpenVINO，首次构建需要访问 Python/PyTorch 依赖源。GPU Worker 还需要 NVIDIA 驱动和 NVIDIA Container Toolkit；主机不需要安装 Node.js、Python 或 CUDA Toolkit。
 
 ```bash
-docker version
+docker --version
 docker compose version
 ```
 
-### 2.2 GPU 条件
-
-GPU 模式需要：
-
-- NVIDIA GPU
-- 与 CUDA 12.1 容器兼容的 NVIDIA 驱动
-- NVIDIA Container Toolkit
-- 当前 Compose GPU 服务默认申请 2 张 NVIDIA GPU
-
-检查宿主机和容器 GPU：
+仅在启用 GPU profile 前执行以下检查：
 
 ```bash
 nvidia-smi
-docker run --rm --gpus all \
-  nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04 \
-  nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04 nvidia-smi
 ```
 
-没有 GPU 时使用 CPU 模式。CPU 模式能够执行真实训练及 FP32 模型转换，但不支持 SDXL 训练、FP16 转换和 TensorRT 转换。
+该命令应列出预期 GPU。若失败，先修复驱动或 NVIDIA Container Toolkit，再构建 GPU Worker 镜像。GPU Worker 镜像构建会下载 Python 与 NVIDIA 推理依赖；隔离网络必须预先镜像并配置内部镜像仓库。
 
-## 3. 准备配置
+CPU Worker 默认使用阿里云 Debian 与 PyPI 镜像加速依赖下载。企业内网有自建镜像时，可通过 `DEBIAN_MIRROR`、`DEBIAN_SECURITY_MIRROR`、`PYPI_INDEX_URL` 和 `PYTORCH_INDEX_URL` Docker build args 替换；隔离部署前应将这些依赖全部同步到内部制品仓库或镜像缓存。
 
-进入项目目录，复制环境变量模板：
+需要向用户网络放行的端口：Web `5173/tcp` 和 API `4000/tcp`。PostgreSQL、Redis 和 MinIO S3 API 只在 Compose 网络内通信。MinIO 控制台默认只绑定到 `127.0.0.1:19001`。
+
+> 合规前提：Worker 镜像会集成 Ultralytics/YOLO 的 AGPL 路径。当前仓库尚未包含 `LICENSE` 和 `THIRD_PARTY_NOTICES.md`，因此在对外分发前必须完成许可证文本、源码提供方式、修改说明和权重来源记录。
+
+## 2. 配置内网地址与密钥
+
+在项目根目录创建生产配置：
 
 ```bash
-cd /path/to/codex-train-server
 cp .env.example .env
+chmod 600 .env
+openssl rand -base64 48
 ```
 
-编辑 `.env`，至少修改数据库密码、MinIO 密码、JWT 密钥和管理员密码：
+将生成的随机值写入 `JWT_SECRET`，并替换 PostgreSQL 与 MinIO 密码。以当前服务器 IP `172.16.66.249` 的内网部署为例；域名部署时将 IP 换为实际 HTTPS 地址。
 
 ```dotenv
 COMPOSE_PROJECT_NAME=forge-ai
 
-POSTGRES_PASSWORD=请设置强密码
+POSTGRES_PASSWORD=<高强度数据库密码>
 MINIO_ROOT_USER=forge-minio
-MINIO_ROOT_PASSWORD=请设置强密码
-JWT_SECRET=请设置长度足够的随机密钥
-
+MINIO_ROOT_PASSWORD=<高强度MinIO密码>
+JWT_SECRET=<至少32字符的随机密钥>
 BOOTSTRAP_ADMIN_USERNAME=admin
-BOOTSTRAP_ADMIN_PASSWORD=请设置至少12位的强密码
+BOOTSTRAP_ADMIN_PASSWORD=<至少12字符的初始管理员密码>
 BOOTSTRAP_ADMIN_DISPLAY_NAME=平台管理员
 ALLOW_WEAK_BOOTSTRAP_PASSWORD=false
-
 FORGE_GPU_ENABLED=false
 FORGE_CPU_TRAINING_ENABLED=true
 FORGE_CPU_ONNX_ENABLED=true
-FORGE_PRETRAINED_OFFLINE=false
-HF_ENDPOINT=https://huggingface.co
-FORGE_SDXL_BASE_MODEL=/data/model-cache/stable-diffusion-xl-base-1.0
 
-CORS_ORIGIN=http://localhost:5174
-VITE_API_BASE_URL=http://localhost:4000/api/v1
+CORS_ORIGIN=http://172.16.66.249:5173
+VITE_API_BASE_URL=http://172.16.66.249:4000/api/v1
 
 WEB_BIND=0.0.0.0
-WEB_PORT=5174
+WEB_PORT=5173
 API_BIND=0.0.0.0
 API_PUBLIC_PORT=4000
 MINIO_CONSOLE_BIND=127.0.0.1
 MINIO_CONSOLE_PORT=19001
 ```
 
-配置说明：
+`VITE_API_BASE_URL` 会编译进 Web 静态文件，变更后必须重新构建 Web 镜像。`CORS_ORIGIN` 必须与用户浏览器访问 Web 的完整 Origin 完全一致，包括协议、主机和端口。不要将二者写为浏览器本机的 `localhost`，除非用户就在部署服务器上访问。
 
-| 变量 | 说明 |
-| --- | --- |
-| `COMPOSE_PROJECT_NAME` | Compose 项目名，也决定默认数据卷名称前缀 |
-| `BOOTSTRAP_ADMIN_*` | 系统初始化时创建的管理员账号 |
-| `ALLOW_WEAK_BOOTSTRAP_PASSWORD` | 是否允许低于 12 位的管理员密码；生产环境保持 `false` |
-| `FORGE_GPU_ENABLED` | API 是否把训练和模型转换任务投递到 GPU 队列 |
-| `FORGE_CPU_TRAINING_ENABLED` | 是否允许 CPU 训练 |
-| `FORGE_CPU_ONNX_ENABLED` | 是否允许 CPU ONNX 转换 |
-| `FORGE_PRETRAINED_OFFLINE` | 是否只从本地缓存加载预训练模型 |
-| `HF_ENDPOINT` | Hugging Face 模型源或企业内部镜像地址 |
-| `FORGE_SDXL_BASE_MODEL` | SDXL Diffusers 基础模型目录 |
-| `CORS_ORIGIN` | 浏览器实际访问 Web 的 Origin，必须包含协议和端口 |
-| `VITE_API_BASE_URL` | 浏览器访问 API 的完整基础地址，在 Web 镜像构建时写入 |
-
-管理员密码在 `ALLOW_WEAK_BOOTSTRAP_PASSWORD=false` 时至少需要 12 位。初始化参数负责创建账号，不用于覆盖数据库中已经存在的账号密码。
-
-### 3.1 内网地址配置
-
-当用户通过 `http://192.168.10.20:5174` 访问平台，API 使用 `4000` 端口时，应配置：
+若在同一域名的反向代理后部署，例如 `https://forge.example.internal`，设置：
 
 ```dotenv
-CORS_ORIGIN=http://192.168.10.20:5174
-VITE_API_BASE_URL=http://192.168.10.20:4000/api/v1
+CORS_ORIGIN=https://forge.example.internal
+VITE_API_BASE_URL=https://forge.example.internal/api/v1
+API_BIND=127.0.0.1
+WEB_BIND=127.0.0.1
 ```
 
-`VITE_API_BASE_URL` 会写入前端构建产物。修改该变量后必须重新构建 `web`；修改 `CORS_ORIGIN` 后必须重新创建 `api`。
+反向代理应将 `/api/` 转发到 `http://127.0.0.1:4000/`，其余路径转发到 `http://127.0.0.1:5173/`，并在代理层终止 TLS。
 
-### 3.2 端口冲突处理
+## 3. 首次启动
 
-先检查端口占用：
+CPU-only 主机使用默认路径：
 
 ```bash
-ss -ltnp | grep -E ':(5174|4000|19001)\b'
-```
-
-如有冲突，在 `.env` 中选择未占用端口，并同步修改浏览器地址：
-
-```dotenv
-WEB_PORT=15174
-API_PUBLIC_PORT=14000
-MINIO_CONSOLE_PORT=19002
-CORS_ORIGIN=http://192.168.10.20:15174
-VITE_API_BASE_URL=http://192.168.10.20:14000/api/v1
-```
-
-端口修改后重新构建并启动：
-
-```bash
-docker compose up -d --build
-```
-
-## 4. CPU 模式部署
-
-CPU 模式是默认部署方式，不构建 GPU Worker：
-
-```bash
-docker compose config --quiet
-docker compose up -d --build
-```
-
-查看状态：
-
-```bash
+docker compose config
+docker compose build
+docker compose up -d
 docker compose ps
-docker compose logs --tail=100 api web cpu-worker export-worker
 ```
 
-CPU 模式支持：
+该路径不会构建或拉取 CUDA 镜像。`export-worker` 消费导出队列，`cpu-worker` 消费真实 YOLO、语义分割、关键点 CPU 训练与 FP32 ONNX、TorchScript、OpenVINO 转换队列。页面显示 CPU Worker 已启用；TensorRT 和 SDXL 保持禁用。
 
-- YOLOv5u、YOLOv8 目标检测训练
-- YOLOv8-Seg 实例分割训练
-- SegFormer、U-Net、DeepLabV3+ 语义分割训练
-- YOLOv8-Pose、HRNet、HigherHRNet 关键点训练
-- ONNX、TorchScript、OpenVINO FP32 转换
-
-CPU 训练使用部署服务器的 CPU 和内存，不使用访问网页的客户端计算资源。大型数据集和较大模型在 CPU 上训练耗时较长。
-
-## 5. GPU 模式部署
-
-在 `.env` 中启用 GPU：
-
-```dotenv
-FORGE_GPU_ENABLED=true
-```
-
-构建并启动 GPU profile：
+GPU 主机需要先在 `.env` 设置 `FORGE_GPU_ENABLED=true`，然后显式启用 profile：
 
 ```bash
-docker compose --profile gpu config --quiet
 docker compose --profile gpu up -d --build
+docker compose --profile gpu ps
 ```
 
-确认 GPU Worker 可见 GPU：
+GPU profile 启动 `worker`，它消费 GPU 训练与转换队列；默认 `export-worker` 和 `cpu-worker` 仍然运行。
+
+API 服务启动命令会顺序执行 `npm run db:migrate`、`npm run db:seed` 和 `npm run start:api`。Migration 通过 `schema_migrations` 记录，重复启动不会重复执行已完成的 SQL；seed 只创建默认工作空间和一个由 `BOOTSTRAP_ADMIN_*` 指定的管理员，不会创建数据集、任务、模型、转换或标注示例。
+
+升级现有部署不会删除 PostgreSQL 或产物卷中的历史记录。需要验收全新的空工作区时，应为 `COMPOSE_PROJECT_NAME` 使用一个尚未使用过的名称，从而创建全新持久卷；不要对仍需保留数据的部署执行 `docker compose down -v`。
+
+观察首次构建和启动日志：
+
+```bash
+docker compose logs -f --tail=200 postgres redis api export-worker cpu-worker web
+```
+
+初始化账号由 `BOOTSTRAP_ADMIN_USERNAME`、`BOOTSTRAP_ADMIN_PASSWORD` 和 `BOOTSTRAP_ADMIN_DISPLAY_NAME` 注入，角色固定为管理员。密码只在首次创建账号时写入；若数据库已经存在该账号，重新启动不会覆盖其已修改的密码。不要在文档、镜像或脚本中写入固定初始密码。
+
+`BOOTSTRAP_ADMIN_PASSWORD` 默认至少需 12 个字符。仅在必要与旧系统对接时，可将 `ALLOW_WEAK_BOOTSTRAP_PASSWORD=true` 与 5-11 个字符的密码同时设置；该开关应在更换为高强度密码后恢复为 `false`。
+
+## 4. 启动验证
+
+```bash
+curl -fsS http://127.0.0.1:4000/api/v1/health
+curl -fsS http://127.0.0.1:4000/api/v1/ready
+docker compose exec redis redis-cli ping
+docker compose exec postgres psql -U forge -d forge -c 'SELECT id, applied_at FROM schema_migrations ORDER BY id;'
+docker compose exec postgres psql -U forge -d forge -c 'SELECT username, role FROM users ORDER BY username;'
+```
+
+CPU-only 预期：两个 HTTP 接口返回 `status` 为 `ok` / `ready`，Redis 返回 `PONG`，`export-worker` 与 `cpu-worker` 正常运行，migration 包含已应用的 SQL。随后从另一台内网机器打开 `http://<服务器地址>:5173/`，使用 `.env` 中的管理员账号登录；工作台应显示 CPU Worker 已启用，真实 YOLO 检测、YOLOv8-Seg、YOLOv8-Pose CPU 训练与 FP32 ONNX、TorchScript、OpenVINO 转换可提交，TensorRT 不可提交。
+
+YOLO 转换优先使用平台训练生成且带模型家族血缘的 `best.pt`，会调用 YOLOv5/YOLOv8 检测、YOLOv8-Seg 或 YOLOv8-Pose 对应官方导出器并校验结果。OpenVINO 产物以包含 XML 与 BIN 的 ZIP 提供。已有 `.onnx` 会在校验后复制，通用 TorchScript/JIT 可执行 ONNX 导出；无法识别模型家族的普通 PyTorch state dict 会明确失败，不会生成伪模型文件。
+
+标注审核按“数据集级提交、图像级决策”运行：标注员可以跨图片保存草稿，完成全部图片后点击“提交审核”；提交中的图像为只读。管理员从任务中心、审核员从数据中心的“待审核”数据集进入审核工作台，可逐张或批量通过/驳回，驳回必须填写原因。数据集只有在所有图像均为“已通过”时才变为“可训练”，训练接口会以 `DATASET_REVIEW_REQUIRED` 拒绝未通过审核的数据集；导出则按整个数据集读取已审核且有内容的图片，跳过未标注图片。已通过标注再次编辑会回到草稿并要求重新审核，新增图片也会使数据集回到“标注中”。
+
+升级时 `007_annotation_reviews.sql` 会为标注文档增加 `draft`、`submitted`、`approved`、`rejected` 状态和提交/审核人员、时间、原因字段。为兼容升级前“有标注即就绪”的规则，已有非空标注文档在首次迁移时会登记为已通过，不删除或重写标注几何数据。`009_annotation_workspace_and_sdxl_captions.sql` 增加 Caption、图像标签/裁剪属性和 Image Folder 导出约束，旧矩形、多边形、关键点 JSON 保持可读。
+
+数据集创建时不绑定任务类型。训练向导选择任务后只显示兼容的标准格式：目标检测为 YOLO、COCO、VOC；YOLOv8-Seg 为 YOLO Segmentation TXT，其他语义分割为 COCO Segmentation、PNG Mask；YOLOv8-Pose 为 YOLO Pose TXT，其他关键点模型为 COCO Keypoints；SDXL 固定使用 Image Folder + Caption。格式值保存在训练配置中，Worker 会先生成所选标准格式，再通过对应解析器读回为框架原生训练数据。
+
+标注工作台支持矩形、多边形、线段/折线、椭圆、关键点和骨架；对象可移动、编辑控制点、隐藏和锁定。SDXL 页签按图保存是否纳入训练、主 Caption、语言、标签和可选归一化裁剪区域。勾选“纳入训练”后必须填写主 Caption，所有几何与图像级字段共用同一个 revision、统一保存和审核状态。
+
+YOLO 检测训练只读取数据集中包含有效矩形框的已标注图片；YOLOv8-Seg 读取矩形框或多边形并生成实例分割 TXT；YOLOv8-Pose 读取编号关键点并生成 Pose TXT。三者都要求 `train` 分片至少有一张有效图片。若没有独立 `validation` 分片，执行器会使用训练分片完成验证。CPU 建议从 `yolov8n`/`yolov8n-seg`/`yolov8n-pose`/`yolov5n`、batch 1-4 开始；CPU 真实训练可能耗时数小时，生产训练优先使用 GPU Worker。
+
+其他语义分割训练只读取标签属于数据集类别的矩形框/多边形标注，并将其栅格化为背景加类别索引 mask；其他关键点训练读取正整数编号的关键点并生成高斯热图，COCO Keypoints 首版按每张图一个对象实例组织。两者都要求 `train` 分片至少有一张有效标注图；没有 `validation` 时使用训练分片验证。SegFormer 加载 NVIDIA MiT 权重，U-Net 和 DeepLabV3+ 加载 TorchVision ImageNet ResNet 编码器权重，HRNet/HigherHRNet 加载 timm ImageNet HRNet 主干；任务产物清单会记录 `dataFormat`、`weightSource` 和 `pretrainedSource`。向导也保留“从头训练”选项。CPU 建议先用 128-384 输入、batch 1-4 验证数据契约，再扩大正式训练配置。
+
+成功的 SegFormer/U-Net/DeepLabV3+/HRNet/HigherHRNet 任务生成可加载的 `model.torchscript.pt`；YOLO 任务登记 Ultralytics `best.pt`。通用转换器可将平台生成的 TorchScript 或 YOLO 权重真实导出为 ONNX、TorchScript 和 OpenVINO；GPU Worker 可经 ONNX 构建 TensorRT engine。手工上传的普通 state dict 缺少网络结构，不能自动转换，需上传 TorchScript/JIT、ONNX 或具有可识别血缘的 YOLO 权重。
+
+训练中心每 3 秒刷新任务状态、Epoch、总体进度、主指标、指标曲线和资源采样。指标图左轴显示 mAP、Precision、Recall、mIoU、OKS 等质量分数，右轴独立显示 Loss 刻度，图例显示最新精确值，悬浮/触摸显示对应 Epoch 的全部数值。YOLO 从框架生成的 `results.csv` 增量读取 loss、Precision、Recall、mAP@50 和 mAP@50-95；分割、关键点与 SDXL 通过结构化 Runner 事件上报。CPU Worker 采集训练进程树的 CPU 与内存，GPU Worker 额外通过 `nvidia-smi` 采集利用率、显存和功耗。指标和遥测写入 PostgreSQL，关闭浏览器不会丢失。历史 YOLO 任务可从保留的 `results.csv` 回填 Epoch 指标，但任务结束后无法重建历史资源采样。
+
+选择“官方预训练权重”时，训练 Worker 会先检查共享卷的 `/data/model-cache`；缺少对应 YOLO 权重时会自动从 Ultralytics 官方资产下载到该目录，再使用本地文件启动训练。平台的 YOLOv5 选项对应 Ultralytics YOLOv5u 权重族。完全离线部署可在训练向导选择“从头训练（离线可用）”，或预先准备所需的 `yolov5nu.pt` / `yolov5su.pt` 等 YOLOv5u 权重、`yolov8n.pt` / `yolov8s.pt` 等 YOLOv8 检测权重，以及对应的 `yolov8n-seg.pt` / `yolov8s-seg.pt`、`yolov8n-pose.pt` / `yolov8s-pose.pt` 权重，再写入卷：
+
+```bash
+docker run --rm -v forge-ai_forge-worker-data:/data -v "$PWD/weights":/weights:ro alpine sh -c 'mkdir -p /data/model-cache && cp /weights/*.pt /data/model-cache/'
+```
+
+SegFormer B0-B5、U-Net、DeepLabV3+ ResNet50/101、HRNet W32/W48 和 HigherHRNet W32/W48 可一次预下载并验证。该命令复用 `forge-worker-data` 卷，CPU/GPU Worker 都能读取同一缓存。无法直连 Hugging Face 的网络可在 `.env` 将 `HF_ENDPOINT` 指向企业模型代理或兼容镜像：
+
+```bash
+docker compose run --rm cpu-worker env PYTHONPATH=/app/worker python3 -m forge_worker.prefetch_models
+```
+
+离线加载和一次真实反向传播可通过以下隔离验收验证，不会创建业务任务或写入 PostgreSQL：
+
+```bash
+docker compose run --rm cpu-worker env PYTHONPATH=/app/worker python3 -m forge_worker.acceptance_smoke --pretrained
+```
+
+下载成功后可将 `.env` 设置为 `FORGE_PRETRAINED_OFFLINE=true`，再执行 `docker compose up -d --force-recreate cpu-worker`；GPU profile 同时重建 `worker`。离线模式缺少某个权重时任务会明确失败，不会静默改用随机初始化。未开启离线模式时，YOLO 权重由训练任务按需自动下载；SegFormer 的 Hugging Face 权重、TorchVision 编码器权重和 HRNet/HigherHRNet timm 权重也会按其框架缓存规则在首次训练时下载，下载失败会明确失败。SegFormer 也支持将完整 Hugging Face 模型目录放到 `/data/model-cache/pretrained/<模型名>`，以及兼容权重文件 `/data/model-cache/pretrained/<模型名>.pth`；HRNet/HigherHRNet 支持同名 timm `.pth` checkpoint。
+
+模型仓库支持直接上传 `.pt`、`.pth`、`.onnx`、`.safetensors`、`.torchscript`、OpenVINO `.xml/.bin` 文件，单文件上限为 512 MB。上传文件与数据集图像都写入 `forge-worker-data` 共享卷并登记制品元数据，因此该卷必须纳入备份。
+
+数据集导出由 CPU `export-worker` 生成 ZIP 产物，始终按整个数据集处理，并统一排除未审核、没有标注或与所选格式不兼容的图片；不同任务段中的未标注图片也会被跳过。YOLO 写入 `images/labels` 与 `dataset.yaml`；COCO Detection、COCO Segmentation 和 COCO Keypoints 写入对应标准 JSON；VOC 写入逐图 XML 与划分清单；PNG Mask 写入 8 位类别索引掩码和 `classes.json`；Image Folder 写入入选图片和逐图 `metadata.jsonl`。七种格式都会包含 `manifest.json`；启用“包含图像”时只复制实际进入导出的原图。共享卷需要同时容纳原始数据、正在生成的临时包和最终 ZIP，容量规划应预留至少一份完整数据集的额外空间。
+
+GPU profile 额外验证：
 
 ```bash
 docker compose --profile gpu exec worker nvidia-smi
-docker compose --profile gpu logs --tail=100 worker
 ```
 
-GPU 模式支持全部 CPU 模式能力，并增加：
+### SDXL 基础模型与 LoRA
 
-- FP16 模型转换
-- TensorRT 转换
-- SDXL LoRA 和 DreamBooth LoRA 训练
-
-GPU 资源使用规则：
-
-- YOLOv5u、YOLOv8、YOLOv8-Seg、YOLOv8-Pose 可按任务配置使用 1 张或 2 张 GPU。
-- SegFormer、U-Net、DeepLabV3+、HRNet、HigherHRNet 当前单个任务使用 1 张 GPU。
-- SDXL 当前单个任务使用 1 张 GPU。
-- CPU Worker 在 GPU 部署中仍会运行，负责系统允许的 CPU 队列任务；训练和转换的默认队列由 `FORGE_GPU_ENABLED` 决定。
-
-## 6. 准备预训练模型
-
-平台支持从在线模型源下载并缓存预训练权重，也支持先准备缓存再切换到离线加载。
-
-### 6.1 下载通用模型
-
-执行统一预取命令：
-
-```bash
-docker compose run --rm cpu-worker \
-  env PYTHONPATH=/app/worker \
-  python3 -m forge_worker.prefetch_models
-```
-
-模型保存在 `forge-worker-data` 卷的 `/data/model-cache`。模型源可通过 `HF_ENDPOINT` 指向企业内部镜像。
-
-下载完成后执行模型加载检查：
-
-```bash
-docker compose run --rm cpu-worker \
-  env PYTHONPATH=/app/worker \
-  python3 -m forge_worker.acceptance_smoke --pretrained
-```
-
-当服务器不能访问外网时，在缓存准备完成后设置：
-
-```dotenv
-FORGE_PRETRAINED_OFFLINE=true
-```
-
-然后重新创建 Worker：
-
-```bash
-docker compose up -d --force-recreate cpu-worker export-worker
-docker compose --profile gpu up -d --force-recreate worker
-```
-
-未启用 GPU profile 时不需要执行第二条命令。
-
-### 6.2 准备 SDXL 基础模型
-
-SDXL 训练要求 GPU，并要求 `FORGE_SDXL_BASE_MODEL` 指向完整的 Diffusers 模型目录。目录至少应包含：
-
-- `model_index.json`
-- `tokenizer`、`tokenizer_2`
-- `text_encoder`、`text_encoder_2`
-- `vae`
-- `unet`
-- `scheduler`
-
-将宿主机模型目录复制到持久化卷：
+SDXL 任务不会在运行时从公网拉取基础模型。先将完整的 Diffusers 格式 SDXL Base 目录写入共享卷的 `/data/model-cache/stable-diffusion-xl-base-1.0`，目录至少应包含 `model_index.json`、`tokenizer*`、`text_encoder*`、`vae`、`unet` 和 `scheduler`。`FORGE_SDXL_BASE_MODEL` 可修改容器内路径，但该路径必须在 GPU Worker 中可见。
 
 ```bash
 docker run --rm \
   -v forge-ai_forge-worker-data:/data \
   -v /opt/internal-models/stable-diffusion-xl-base-1.0:/source:ro \
   alpine sh -c 'mkdir -p /data/model-cache/stable-diffusion-xl-base-1.0 && cp -a /source/. /data/model-cache/stable-diffusion-xl-base-1.0/'
+docker compose --profile gpu exec worker test -f /data/model-cache/stable-diffusion-xl-base-1.0/model_index.json
 ```
 
-如果修改了 `COMPOSE_PROJECT_NAME`，先通过 `docker volume ls` 确认数据卷名称，再替换命令中的 `forge-ai_forge-worker-data`。
+平台开放 UNet LoRA 与 DreamBooth LoRA，固定 batch 1、FP16 和梯度检查点；不支持 SDXL 全参数训练。输出为 Diffusers SafeTensors LoRA。ONNX、TorchScript、OpenVINO、TensorRT 转换会加载相同 Base、融合 LoRA，并只导出部署所需的 SDXL UNet 组件，不是完整文本编码器/VAE/Pipeline 包。ControlNet 暂不开放，原因是当前数据集没有成对条件图与目标图契约。
 
-确认 Worker 能读取模型：
+CPU 主机会在 SDXL 训练入队前返回 `SDXL_GPU_REQUIRED`，在 SDXL 转换入队前返回 `SDXL_CONVERSION_GPU_REQUIRED`。Base 目录缺失时 GPU 执行器明确失败且不登记模型产物。
+
+## 5. 日常运维
+
+查看状态和日志：
 
 ```bash
-docker compose --profile gpu exec worker \
-  test -f /data/model-cache/stable-diffusion-xl-base-1.0/model_index.json
+docker compose ps
+docker compose logs --tail=200 api
+docker compose logs --tail=200 export-worker
+docker compose logs --tail=200 cpu-worker
+docker compose logs -f export-worker
 ```
 
-## 7. 部署验证
-
-### 7.1 服务健康检查
+仅重启某个服务：
 
 ```bash
-curl -fsS http://127.0.0.1:4000/api/v1/health
-curl -fsS http://127.0.0.1:4000/api/v1/ready
-curl -fsS http://127.0.0.1:4000/api/v1/capabilities
+docker compose restart api
+docker compose restart export-worker
+docker compose restart cpu-worker
 ```
 
-使用自定义 API 端口时替换 `4000`。
+不要使用 `docker compose down -v` 进行普通重启；`-v` 会删除 PostgreSQL、Redis、MinIO 和 Worker 产物卷。
 
-检查基础服务：
+### 5.1 重建镜像与无标签镜像清理
+
+重建本项目镜像时，先记录当前 Compose 服务正在使用的镜像，再完成重建和服务更新，最后只删除本次重建后变为无标签的旧镜像。这样不会误删同一台主机上其他项目的镜像。以下命令在项目根目录执行：
+
+GPU 部署需要在下面每条 `docker compose` 命令中追加 `--profile gpu`，以同时纳入 GPU Worker；CPU-only 部署直接使用示例命令。
 
 ```bash
-docker compose exec redis redis-cli ping
-docker compose exec postgres \
-  psql -U forge -d forge -c 'SELECT username, role FROM users ORDER BY username;'
+# 必须在 build 前记录旧镜像 ID；COMPOSE_PROJECT_NAME 默认来自 .env（本项目为 forge-ai）
+old_image_ids="$(docker compose images --quiet | sort -u)"
+
+docker compose build --pull
+docker compose up -d --remove-orphans
+
+for image_id in ${old_image_ids}; do
+  [ -n "${image_id}" ] || continue
+  # 旧镜像只有在没有任何 RepoTags 时才是本次重建产生的无标签镜像
+  if [ "$(docker image inspect "${image_id}" --format '{{len .RepoTags}}' 2>/dev/null || echo 0)" -eq 0 ]; then
+    docker image rm "${image_id}"
+  fi
+done
 ```
 
-### 7.2 页面验证
-
-浏览器打开：
-
-```text
-http://服务器地址:WEB_PORT
-```
-
-使用 `.env` 中的 `BOOTSTRAP_ADMIN_USERNAME` 和 `BOOTSTRAP_ADMIN_PASSWORD` 登录。依次确认：
-
-1. 工作台可以加载统计数据和近期活动。
-2. 数据中心可以创建数据集并上传图片。
-3. 标注页可以打开图片并保存标注草稿。
-4. 训练中心可以读取能力信息并创建符合当前计算环境的任务。
-5. 模型仓库和转换中心可以正常加载分页列表。
-
-## 8. 当前模型与转换能力
-
-| 任务 | 当前模型 |
-| --- | --- |
-| 目标检测 | YOLOv5u n/s/m/l/x、YOLOv8 n/s/m/l/x |
-| 实例分割 | YOLOv8-Seg n/s/m/l/x |
-| 语义分割 | SegFormer B0-B5、U-Net、DeepLabV3+ ResNet50/101、MobileNetV2、MobileNetV2 RK、MobileNetV3-Large |
-| 关键点检测 | YOLOv8-Pose n/s/m/l/x、HRNet W32/W48、HigherHRNet W32/W48 |
-| 生成模型 | SDXL 1.0 LoRA、SDXL 1.0 DreamBooth LoRA |
-
-转换目标：
-
-| 格式 | CPU | GPU | 说明 |
-| --- | --- | --- | --- |
-| ONNX | FP32 | FP32/FP16 | 通用交换格式 |
-| TorchScript | FP32 | FP32/FP16 | PyTorch 部署 |
-| OpenVINO | FP32 | FP32/FP16 | Intel 设备部署 |
-| TensorRT | 不支持 | FP32/FP16 | NVIDIA GPU 部署 |
-
-标记为“适用 RK”的模型可导出固定输入、静态 batch、NCHW、opset 12 或 13 的 ONNX。平台不生成 RKNN 文件，也不内置 RKNN Toolkit。YOLO 检测、分割、关键点后处理保持在模型外部，由目标设备侧完成 NMS、掩码或关键点解码。
-
-## 9. 数据持久化与磁盘清理
-
-默认数据卷：
-
-| 数据卷 | 内容 |
-| --- | --- |
-| `forge-postgres` | 用户、数据集、标注、任务、审计记录 |
-| `forge-redis` | 队列状态 |
-| `forge-minio` | MinIO 数据 |
-| `forge-worker-data` | 图片、导出包、训练产物、模型、转换产物、模型缓存 |
-
-查看数据卷和磁盘使用：
+重建后可用以下命令复核是否仍有无标签镜像：
 
 ```bash
-docker volume ls | grep forge
-docker system df -v
-docker compose exec -T cpu-worker du -h -d 2 /data | sort -h
+docker image ls --filter dangling=true
 ```
 
-在页面删除数据集、训练任务、模型或转换任务时，系统会删除其数据库记录和对应业务产物。正在运行的任务需要先取消并等待进入终态。
+不要直接执行不带筛选条件的 `docker image prune -f`，因为它会清理主机上所有项目的无标签镜像。若旧镜像仍被其他容器引用，`docker image rm` 会保留该镜像并输出占用信息；确认对应容器已更新后再重试。`/data/model-cache` 中的预训练权重不是镜像，不在此清理范围内。
 
-清理数据库中已经不存在的孤立业务文件，先预览：
+### 5.2 删除与磁盘清理
+
+管理员或审核员在页面删除业务资源时，平台会同步清理其数据库记录和共享卷产物：
+
+- 删除数据集：删除原始图像、标注记录、导出任务及导出 ZIP。
+- 删除训练任务：删除日志、指标、资源采样、训练输出，以及该任务生成的模型版本和转换产物。
+- 删除模型：删除原始模型权重、关联转换任务及其产物。训练任务记录仍保留，但不再提供已删除的模型下载。
+- 删除转换任务：删除终态转换记录、CPU/GPU 队列中的保留任务、产物元数据和对应的 `conversions/<任务ID>` 目录。
+
+活动中的训练或转换任务必须先取消。删除接口会等待 BullMQ 任务释放活动锁；关联导出或转换仍在结束时会返回冲突，稍后重试即可。页面成功提示会显示本次实际释放的磁盘空间。
+
+升级历史版本后，先用 dry-run 检查“数据库记录已删除但目录仍残留”的孤立产物：
 
 ```bash
 docker compose exec -T api npm run artifacts:cleanup
 ```
 
-确认清单后执行：
+确认输出中的 `danglingModelIds`、`orphanConversionIds`、`orphanArtifactIds` 和 `storage.directories` 都属于应删除内容后，再执行：
 
 ```bash
 docker compose exec -T api npm run artifacts:cleanup -- --execute
 ```
 
-该命令只处理 `/data/artifacts` 中可确认的孤立产物，不清理 `/data/model-cache`，也不会删除活动任务正在使用的文件。
+该命令只处理 `/data/artifacts` 下受管的数据集、导出、训练、转换、上传模型和运行时目录，并在删除前再次校验数据库引用。排队或运行中的记录会保留；`/data/model-cache` 预训练权重缓存永远不在清理范围内。执行前仍应按第 6 节完成 PostgreSQL 与 Worker 产物卷备份。
 
-日常停止服务使用：
+## 6. 备份与恢复
 
-```bash
-docker compose down
-```
-
-不要使用 `docker compose down -v`，该命令会删除持久化数据卷。
-
-## 10. 备份
-
-备份前确认磁盘空间充足，并尽量安排在没有上传、标注保存、训练产物写入和模型转换的维护窗口。
-
-创建备份目录并备份 PostgreSQL：
+在升级前和定期任务中备份 PostgreSQL、MinIO 和 Worker 产物。以下命令假设 `COMPOSE_PROJECT_NAME=forge-ai`，备份文件保存在项目的 `backups/` 中：
 
 ```bash
 mkdir -p backups
-docker compose exec -T postgres \
-  pg_dump -U forge -d forge -Fc \
-  > backups/forge-$(date +%F-%H%M%S).dump
+docker compose exec -T postgres pg_dump -U forge -d forge -Fc > backups/forge-$(date +%F-%H%M%S).dump
+docker run --rm -v forge-ai_forge-minio:/source:ro -v "$PWD/backups":/backup alpine tar czf /backup/minio-$(date +%F-%H%M%S).tgz -C /source .
+docker run --rm -v forge-ai_forge-worker-data:/source:ro -v "$PWD/backups":/backup alpine tar czf /backup/worker-artifacts-$(date +%F-%H%M%S).tgz -C /source .
 ```
 
-备份业务文件和模型缓存：
+恢复 PostgreSQL 前先停止写入服务：
 
 ```bash
-docker run --rm \
-  -v forge-ai_forge-worker-data:/source:ro \
-  -v "$PWD/backups":/backup \
-  alpine tar czf /backup/worker-data-$(date +%F-%H%M%S).tgz -C /source .
+docker compose stop api export-worker cpu-worker worker web
+cat backups/<数据库备份>.dump | docker compose exec -T postgres pg_restore -U forge -d forge --clean --if-exists
+docker compose start api export-worker cpu-worker worker web
 ```
 
-备份 MinIO：
+恢复卷归档会覆盖目标卷中的文件，只能在确认备份来源和目标卷名称后操作：
 
 ```bash
-docker run --rm \
-  -v forge-ai_forge-minio:/source:ro \
-  -v "$PWD/backups":/backup \
-  alpine tar czf /backup/minio-$(date +%F-%H%M%S).tgz -C /source .
+docker compose stop api export-worker cpu-worker worker
+docker run --rm -v forge-ai_forge-worker-data:/target -v "$PWD/backups":/backup alpine sh -c 'rm -rf /target/* && tar xzf /backup/<产物备份>.tgz -C /target'
+docker compose start api export-worker cpu-worker worker
 ```
 
-若 `COMPOSE_PROJECT_NAME` 不是 `forge-ai`，用 `docker volume ls` 查出实际卷名并替换命令。备份完成后检查文件大小，并在独立环境验证备份可读取。恢复会覆盖当前数据，只能在停止写入、确认目标环境和验证备份文件后执行。
+MinIO 卷恢复使用相同模式，将卷名替换为 `forge-ai_forge-minio`。恢复后先检查 migration 和 artifact 元数据，再开放 Web 写入流量。
 
-## 11. 日常运维命令
+## 7. 升级与回退
 
-查看服务：
+升级前完成备份，并保留当前已构建镜像标签或镜像 ID：
+
+镜像重建必须按第 5.1 节先记录旧镜像、重建并更新服务，再删除本次重建产生的无标签镜像；不要在此流程中改用未筛选的全局 prune。
 
 ```bash
+docker compose images
+docker compose build --pull
+docker compose run --rm --no-deps api npm run db:migrate
+docker compose up -d --remove-orphans
 docker compose ps
 ```
 
-查看日志：
+`db:migrate` 只会向前应用新增 migration。不要修改已经在生产数据库执行过的 SQL 文件；新增结构必须使用下一个编号文件。若 Web 的 `VITE_API_BASE_URL` 变更，必须执行 `docker compose build web` 后再 `docker compose up -d web`。
 
-```bash
-docker compose logs -f --tail=200 api
-docker compose logs -f --tail=200 cpu-worker
-docker compose logs -f --tail=200 export-worker
-docker compose --profile gpu logs -f --tail=200 worker
-```
+代码或镜像回退只能在没有不兼容 migration 的前提下进行。若 migration 已改变数据模型，先恢复对应 PostgreSQL 备份，再恢复先前镜像；不要仅回退容器镜像。
 
-重启单个服务：
+## 8. 故障排查
 
-```bash
-docker compose restart api
-docker compose restart cpu-worker
-```
+| 现象 | 检查与处理 |
+| --- | --- |
+| 内网浏览器登录后请求 `localhost:4000` | `.env` 中仍使用 localhost；设置实际服务器 IP/域名的 `VITE_API_BASE_URL` 与 `CORS_ORIGIN`，然后执行 `docker compose build web && docker compose up -d --force-recreate web api`。 |
+| 浏览器报 CORS 错误 | `CORS_ORIGIN` 与 Web 实际地址不一致；检查协议、主机和端口，重建并重启 API。 |
+| 上传或删除显示 `Failed to fetch` | 检查浏览器 Network 中的预检响应；除 `204` 外，`Access-Control-Allow-Methods` 还必须包含实际使用的 `PUT`、`PATCH` 或 `DELETE`。当前 API 已显式开放这些产品方法。 |
+| GPU profile 的 Worker 启动但没有 GPU | 执行 `docker run --rm --gpus all ... nvidia-smi`；失败说明 Docker 未接入 NVIDIA runtime。检查主机驱动和 NVIDIA Container Toolkit。 |
+| CPU 训练返回 `TRAINING_WORKER_UNAVAILABLE` | 确认 `.env` 中 `FORGE_CPU_TRAINING_ENABLED=true`，并检查 `docker compose ps cpu-worker` 与 `docker compose logs cpu-worker`。 |
+| CPU 转换返回 `CPU_CONVERSION_UNAVAILABLE` | CPU 模式支持 ONNX、TorchScript、OpenVINO 的 FP32 转换；TensorRT 必须启用 GPU profile。 |
+| 分割/关键点任务提示无法加载预训练权重 | 联网环境执行 `docker compose run --rm cpu-worker env PYTHONPATH=/app/worker python3 -m forge_worker.prefetch_models`；离线环境检查共享卷缓存是否完整，并确认 `FORGE_PRETRAINED_OFFLINE=true`。系统不会静默退回随机初始化。 |
+| SDXL 返回 `SDXL_GPU_REQUIRED` / `SDXL_CONVERSION_GPU_REQUIRED` | SDXL 的训练、LoRA 融合和 UNet 转换需要 CUDA Worker；CPU-only 部署不会接收该任务。 |
+| SDXL 提示 Base 路径不存在 | 按启动验证章节预置完整 Diffusers SDXL Base，并确认 `FORGE_SDXL_BASE_MODEL` 指向 GPU 容器内可读目录。 |
+| 模型转换返回源模型/家族错误 | 优先选择平台 YOLO 训练生成的模型；手工上传的普通 state dict 不能安全重建网络，需提供可识别的 YOLOv5/YOLOv8 framework 血缘、TorchScript/JIT 或 ONNX。 |
+| YOLO 训练提示训练分片无有效框 | 确认所选数据集的 `train` 分片至少有一张已保存矩形框或多边形标注的图片，且标注标签存在于数据集类别中。 |
+| YOLO 首次训练无法获取权重 | 非离线模式会自动下载到 `/data/model-cache`；检查 Worker 外网/内部制品源、共享卷写权限，或在离线模式下预置对应官方 `.pt` 权重。 |
+| Worker 反复失败 | CPU 队列查看 `docker compose logs --tail=300 cpu-worker`，GPU 队列查看 `worker`；同时检查任务 `error_message` 和 Redis 连通性。Worker 会将失败任务持久化为 `failed`。 |
+| API 启动失败 | 先看 `docker compose logs api postgres redis`；确认 `.env` 有 `JWT_SECRET`，并检查数据库密码是否与已有 PostgreSQL 卷一致。 |
+| 访问产物返回 `ARTIFACT_CONTENT_NOT_FOUND` | 产物元数据存在但共享 Worker 卷缺少文件；核对 `forge-worker-data` 卷、`FORGE_ARTIFACT_ROOT=/data/artifacts` 和 Worker 日志。 |
+| 导出任务失败并提示无法读取图像尺寸 | 上传文件不是有效的受支持图像，或共享卷中的原图已损坏；通过图像预览接口确认文件可读后重新上传。 |
+| 模型上传返回 `413` | 文件超过 API 当前 512 MB 单文件限制；使用更小权重、拆分 OpenVINO 文件，或在受控环境调整 API `bodyLimit` 后重建镜像。 |
+| 构建 Worker 时拉取依赖失败 | 该镜像需要访问 NodeSource、PyPI 和 PyTorch 索引；在隔离网络中预置镜像/包缓存或使用内部镜像仓库。 |
+| MinIO 控制台无法访问 | 默认只监听部署机 `127.0.0.1:19001`；使用 SSH 隧道，或仅在受控内网临时修改 `MINIO_CONSOLE_BIND` 后重启 MinIO。 |
 
-重新构建应用服务：
+## 9. 已知交付边界
 
-```bash
-docker compose up -d --build api web cpu-worker export-worker
-docker compose --profile gpu up -d --build worker
-```
-
-查看任务队列：
-
-```bash
-docker compose exec redis redis-cli LLEN bull:training:wait
-docker compose exec redis redis-cli LLEN bull:conversion:wait
-docker compose exec redis redis-cli LLEN bull:export:wait
-```
-
-## 12. 故障排查
-
-### 12.1 页面提示 `Failed to fetch`
-
-按顺序检查：
-
-```bash
-docker compose ps
-curl -v http://127.0.0.1:4000/api/v1/health
-docker compose logs --tail=200 api
-```
-
-然后确认：
-
-- `VITE_API_BASE_URL` 是客户端可以访问的 API 地址，不是容器内部地址。
-- `CORS_ORIGIN` 与浏览器地址栏中的协议、主机和端口完全一致。
-- 防火墙允许 Web 和 API 端口。
-- 修改 `VITE_API_BASE_URL` 后已经重建 `web`。
-- API CORS 允许 `GET`、`POST`、`PUT`、`PATCH`、`DELETE` 和 `OPTIONS`。
-
-### 12.2 数据上传失败
-
-- 只上传 JPEG、PNG 或 WebP 图片。
-- 单张图片不能超过 50 MB。
-- 检查 `forge-worker-data` 所在磁盘是否已满。
-- 查看 `api` 日志中的请求状态和文件写入错误。
-- 确认数据集未被删除，当前账号具有 `admin` 或 `engineer` 权限。
-
-### 12.3 任务一直排队
-
-- CPU 模式检查 `cpu-worker`。
-- GPU 模式检查 `worker`、`nvidia-smi` 和 `FORGE_GPU_ENABLED`。
-- 数据导出检查 `export-worker`。
-- 检查 Redis 是否返回 `PONG`。
-- 查看相应 Worker 日志中的模型下载、数据格式或显存错误。
-
-### 12.4 GPU Worker 启动失败
-
-- 确认宿主机 `nvidia-smi` 正常。
-- 确认 NVIDIA Container Toolkit 已安装。
-- 确认容器测试命令能够看到 GPU。
-- 当前 Compose 默认申请 2 张 GPU；服务器 GPU 数量不足时，应将 `docker-compose.yml` 中 GPU reservation 的 `count` 调整为实际数量，并同步任务中的 GPU 数量。
-
-### 12.5 预训练模型加载失败
-
-- 在线模式检查 DNS、代理、证书和 `HF_ENDPOINT`。
-- 离线模式确认模型已经存在于 `/data/model-cache`。
-- 检查模型目录是否完整，文件是否可由容器读取。
-- 查看 Worker 日志中的具体模型名称和缺失文件。
-
-### 12.6 转换失败
-
-- TensorRT 和 FP16 转换必须使用 GPU Worker。
-- CPU 只能执行支持的 FP32 转换。
-- 自定义 PyTorch `state_dict` 不能自动推断网络结构，应上传 ONNX、TorchScript，或使用平台训练生成且可识别的模型。
-- SDXL 转换要求完整基础模型和 LoRA 产物，且只导出融合后的 UNet 组件。
-- 适用 RK 的 ONNX 必须使用固定输入尺寸和静态 batch 1。
-
-## 13. 安全建议
-
-- 仅在受控企业内网开放 Web 和 API 端口。
-- PostgreSQL、Redis 和 MinIO S3 API 保持仅容器网络访问。
-- MinIO 控制台默认绑定 `127.0.0.1`；需要远程管理时通过堡垒机或 SSH 隧道访问。
-- 为 PostgreSQL、MinIO、JWT 和管理员账号分别使用强随机密钥。
-- 定期备份 PostgreSQL 和两个文件数据卷，并验证备份可用性。
-- 限制 Docker 管理权限；能够访问 Docker 的账号等同于拥有宿主机高权限。
-- 通过防火墙限制来源网段，并在入口代理配置 HTTPS 时同步调整 `CORS_ORIGIN` 和 `VITE_API_BASE_URL`。
+- Compose 已启动 MinIO，但当前 Worker 产物使用共享 Docker 卷，尚未实现 S3 上传。备份时必须同时备份 `forge-worker-data`；不能只备份 MinIO。
+- YOLOv5u/YOLOv8、YOLOv8-Seg、YOLOv8-Pose、SegFormer/U-Net/DeepLabV3+、HRNet/HigherHRNet 已接入真实训练和格式转换。仓库提供 `PYTHONPATH=worker python3 -m forge_worker.acceptance_smoke` 隔离验收；它使用临时图像完成反向传播、TorchScript 加载和 ONNX 校验，不会写入业务数据库。
+- SDXL LoRA/DreamBooth LoRA 已实现真实 GPU 训练和融合转换路径，但当前 CPU 部署无法完成 T4 运行验收；正式启用前必须在目标 T4 主机上使用已批准的 Base 模型完成显存、耗时和产物推理验收。TensorRT 同样必须在目标 NVIDIA 运行时验收。
+- 当前镜像使用 Vite preview 托管 Web，适合内网首版。需要高可用、TLS、审计留存、外部访问或多节点 GPU 时，应在前置反向代理、镜像仓库、备份监控和 Kubernetes/编排方案中扩展。

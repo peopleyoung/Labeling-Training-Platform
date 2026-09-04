@@ -41,17 +41,18 @@ export function EmptyState({ icon: Icon, title, description, action }: { icon: L
   return <div className="empty-state"><Icon size={25} /><strong>{title}</strong><span>{description}</span>{action}</div>;
 }
 
-export function Modal({ title, description, children, footer, onClose, width = 'medium' }: {
+export function Modal({ title, description, children, footer, onClose, width = 'medium', className = '' }: {
   title: string;
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
   onClose: () => void;
   width?: 'medium' | 'large';
+  className?: string;
 }) {
   return (
     <div className="modal-layer" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className={`modal modal-${width}`} role="dialog" aria-modal="true" aria-label={title}>
+        <section className={`modal modal-${width} ${className}`.trim()} role="dialog" aria-modal="true" aria-label={title}>
         <header className="modal-header">
           <div><h2>{title}</h2>{description && <p>{description}</p>}</div>
           <button className="icon-button" onClick={onClose} aria-label="关闭"><X size={19} /></button>

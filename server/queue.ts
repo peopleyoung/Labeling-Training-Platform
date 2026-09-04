@@ -2,7 +2,7 @@ import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
 import { setTimeout as delay } from 'node:timers/promises';
 
-export type QueueTaskKind = 'export' | 'training' | 'conversion';
+export type QueueTaskKind = 'export' | 'training' | 'conversion' | 'processing';
 export type ExecutionTarget = 'cpu' | 'gpu';
 
 export class QueueTaskActiveError extends Error {
@@ -14,6 +14,7 @@ export class QueueTaskActiveError extends Error {
 
 export function queueNameFor(kind: QueueTaskKind, executionTarget: ExecutionTarget = 'gpu') {
   if (kind === 'export') return 'forge-export';
+  if (kind === 'processing') return 'forge-cpu';
   return executionTarget === 'cpu' ? 'forge-cpu' : 'forge-gpu';
 }
 

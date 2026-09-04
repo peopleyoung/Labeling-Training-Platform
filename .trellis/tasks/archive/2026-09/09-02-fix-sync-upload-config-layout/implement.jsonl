@@ -1,0 +1,4 @@
+{"file": "CONTEXT.md", "reason": "Project domain model, ownership boundaries, and existing workflow vocabulary."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend package scope and database/API guideline index."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend package scope and component/state guideline index."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Required API, database, and frontend boundary checks for this bugfix."}

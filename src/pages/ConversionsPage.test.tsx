@@ -29,7 +29,7 @@ vi.mock('../context/AppContext', () => ({
   useApp: () => ({
     conversions,
     models: [],
-    session: { accessToken: 'token', user: { id: 'engineer', workspaceId: 'workspace', username: 'engineer', displayName: 'Engineer', role: 'engineer', mustChangePassword: false } },
+    session: { accessToken: 'token', user: { id: 'reviewer', workspaceId: 'workspace', username: 'reviewer', displayName: 'Reviewer', role: 'reviewer', mustChangePassword: false } },
     gpuEnabled: false,
     cpuConversionFormats: ['ONNX', 'TorchScript', 'OpenVINO'],
     createConversion: vi.fn(),
@@ -68,6 +68,6 @@ describe('ConversionsPage task list', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
 
     await waitFor(() => expect(mocks.deleteConversion).toHaveBeenCalledWith(baseTask.id));
-    expect(screen.queryByRole('heading', { name: '删除转换任务及产物' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('heading', { name: '删除转换任务及产物' })).not.toBeInTheDocument());
   });
 });

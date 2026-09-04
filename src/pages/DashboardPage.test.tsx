@@ -10,7 +10,7 @@ const activity: WorkspaceActivity = {
   entityType: 'training_job',
   entityId: 'train-1',
   metadata: { model: 'yolov8m', version: 'v2.1.0' },
-  actor: { id: 'engineer-1', displayName: '算法工程师' },
+  actor: { id: 'reviewer-1', displayName: '审核员' },
   createdAt: new Date().toISOString(),
 };
 
@@ -33,7 +33,7 @@ describe('DashboardPage recent activity', () => {
     render(<MemoryRouter><DashboardPage /></MemoryRouter>);
 
     expect(screen.getByText('创建训练任务')).toBeInTheDocument();
-    expect(screen.getByText('算法工程师 · yolov8m · v2.1.0')).toBeInTheDocument();
+    expect(screen.getByText('审核员 · yolov8m · v2.1.0')).toBeInTheDocument();
     expect(screen.queryByText('暂无活动记录')).not.toBeInTheDocument();
   });
 

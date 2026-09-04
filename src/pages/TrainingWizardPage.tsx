@@ -5,15 +5,21 @@ import { EmptyState, PageHeader } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { dataFormatDescriptions, taskLabels } from '../data/catalog';
 import { trainingDataFormats } from '../../shared/contracts';
-import type { TrainingDataFormat, TrainingDraft, TrainingType } from '../types';
+import { findModelVariant } from '../../shared/modelCatalog';
+import type { AnnotationJob, TrainingDataFormat, TrainingDraft, TrainingType } from '../types';
 
 const taskTypes = [
   { id: 'detection' as const, title: '目标检测', description: '定位零件、划痕与表面缺陷', icon: BoxSelect, color: 'blue', models: [{ value: 'yolov8n', label: 'YOLOv8-N' }, { value: 'yolov8s', label: 'YOLOv8-S' }, { value: 'yolov8m', label: 'YOLOv8-M' }, { value: 'yolov8l', label: 'YOLOv8-L' }, { value: 'yolov8x', label: 'YOLOv8-X' }, { value: 'yolov5n', label: 'YOLOv5u-N' }, { value: 'yolov5s', label: 'YOLOv5u-S' }, { value: 'yolov5m', label: 'YOLOv5u-M' }, { value: 'yolov5l', label: 'YOLOv5u-L' }, { value: 'yolov5x', label: 'YOLOv5u-X' }] },
-  { id: 'segmentation' as const, title: '语义分割', description: '像素级识别气孔、裂纹和区域', icon: Layers3, color: 'cyan', models: [{ value: 'segformer-b0', label: 'SegFormer-B0' }, { value: 'segformer-b1', label: 'SegFormer-B1 · 通用' }, { value: 'segformer-b2', label: 'SegFormer-B2 · 通用' }, { value: 'segformer-b3', label: 'SegFormer-B3 · 通用' }, { value: 'segformer-b4', label: 'SegFormer-B4 · 通用' }, { value: 'segformer-b5', label: 'SegFormer-B5 · 通用' }, { value: 'deeplabv3plus-mobilenetv2', label: 'DeepLabV3+ MobileNetV2 · 通用' }, { value: 'deeplabv3plus-mobilenetv2-rk', label: 'DeepLabV3+ MobileNetV2 · RK 友好' }, { value: 'deeplabv3plus-mobilenetv3-large', label: 'DeepLabV3+ MobileNetV3-Large · 通用' }, { value: 'deeplabv3plus-resnet50', label: 'DeepLabV3+ ResNet50 · 通用' }, { value: 'deeplabv3plus-resnet101', label: 'DeepLabV3+ ResNet101 · 通用' }, { value: 'unet', label: 'U-Net · 通用' }] },
-  { id: 'instance_segmentation' as const, title: '实例分割', description: '区分同类缺陷的独立实例', icon: Layers3, color: 'teal', models: [{ value: 'yolov8n-seg', label: 'YOLOv8-Seg-N · RK 友好' }, { value: 'yolov8s-seg', label: 'YOLOv8-Seg-S · RK 友好' }, { value: 'yolov8m-seg', label: 'YOLOv8-Seg-M · RK 友好' }, { value: 'yolov8l-seg', label: 'YOLOv8-Seg-L · RK 友好' }, { value: 'yolov8x-seg', label: 'YOLOv8-Seg-X · RK 友好' }] },
-  { id: 'keypoint' as const, title: '关键点检测', description: '识别装配定位点与角度', icon: KeyRound, color: 'violet', models: [{ value: 'yolov8n-pose', label: 'YOLOv8-Pose-N · RK 友好' }, { value: 'yolov8s-pose', label: 'YOLOv8-Pose-S · RK 友好' }, { value: 'yolov8m-pose', label: 'YOLOv8-Pose-M · RK 友好' }, { value: 'hrnet-w32', label: 'HRNet-W32 · 通用' }, { value: 'hrnet-w48', label: 'HRNet-W48 · 通用' }, { value: 'higherhrnet-w32', label: 'HigherHRNet-W32 · 通用' }, { value: 'higherhrnet-w48', label: 'HigherHRNet-W48 · 通用' }] },
+  { id: 'segmentation' as const, title: '语义分割', description: '像素级识别气孔、裂纹和区域，支持 YOLO 实例分割', icon: Layers3, color: 'cyan', models: [{ value: 'segformer-b0', label: 'SegFormer-B0' }, { value: 'segformer-b1', label: 'SegFormer-B1' }, { value: 'segformer-b2', label: 'SegFormer-B2' }, { value: 'segformer-b3', label: 'SegFormer-B3' }, { value: 'segformer-b4', label: 'SegFormer-B4' }, { value: 'segformer-b5', label: 'SegFormer-B5' }, { value: 'deeplabv3plus-resnet50', label: 'DeepLabV3+ ResNet50' }, { value: 'deeplabv3plus-resnet101', label: 'DeepLabV3+ ResNet101' }, { value: 'unet', label: 'U-Net' }, { value: 'yolov8n-seg', label: 'YOLOv8-Seg-N' }, { value: 'yolov8s-seg', label: 'YOLOv8-Seg-S' }, { value: 'yolov8m-seg', label: 'YOLOv8-Seg-M' }, { value: 'yolov8l-seg', label: 'YOLOv8-Seg-L' }, { value: 'yolov8x-seg', label: 'YOLOv8-Seg-X' }] },
+  { id: 'keypoint' as const, title: '关键点检测', description: '识别装配定位点与角度，支持 YOLO 姿态模型', icon: KeyRound, color: 'violet', models: [{ value: 'hrnet-w32', label: 'HRNet-W32' }, { value: 'hrnet-w48', label: 'HRNet-W48' }, { value: 'higherhrnet-w32', label: 'HigherHRNet-W32' }, { value: 'higherhrnet-w48', label: 'HigherHRNet-W48' }, { value: 'yolov8n-pose', label: 'YOLOv8-Pose-N' }, { value: 'yolov8s-pose', label: 'YOLOv8-Pose-S' }, { value: 'yolov8m-pose', label: 'YOLOv8-Pose-M' }, { value: 'yolov8l-pose', label: 'YOLOv8-Pose-L' }, { value: 'yolov8x-pose', label: 'YOLOv8-Pose-X' }] },
   { id: 'sdxl' as const, title: 'SDXL 微调', description: '生成可控的合成缺陷样本', icon: WandSparkles, color: 'orange', models: [{ value: 'sdxl-1.0-lora', label: 'SDXL 1.0 LoRA' }, { value: 'sdxl-1.0-dreambooth-lora', label: 'SDXL DreamBooth LoRA' }] },
 ];
+
+function defaultFormatForModel(type: TrainingType, model: string): TrainingDataFormat {
+  if (model.endsWith('-seg')) return 'YOLO_SEGMENTATION';
+  if (model.endsWith('-pose')) return 'YOLO_KEYPOINTS';
+  return trainingDataFormats[type][0];
+}
 
 const defaultDraft: TrainingDraft = {
   type: 'detection',
@@ -22,7 +28,6 @@ const defaultDraft: TrainingDraft = {
   version: 'v1',
   datasetId: '',
   model: 'yolov8m',
-  architectureVariant: 'rk_compatible',
   weightSource: 'pretrained',
   epochs: 120,
   batchSize: 32,
@@ -37,9 +42,11 @@ export function TrainingWizardPage() {
   const [searchParams] = useSearchParams();
   const [step, setStep] = useState(1);
   const [draft, setDraft] = useState<TrainingDraft>({ ...defaultDraft, datasetId: searchParams.get('dataset') ?? defaultDraft.datasetId });
-  const { datasets, createTrainingJob, gpuEnabled, cpuTrainingEnabled, notify } = useApp();
+  const { datasets, annotationJobs, createTrainingJob, gpuEnabled, cpuTrainingEnabled, notify } = useApp();
   const navigate = useNavigate();
   const [submitting, setSubmitting] = useState(false);
+  const [datasetJobs, setDatasetJobs] = useState<AnnotationJob[]>([]);
+  const [trainingScope, setTrainingScopeState] = useState<'all' | 'custom'>('all');
   const currentTask = taskTypes.find((item) => item.id === draft.type) ?? taskTypes[0];
   const stepLabels = ['任务类型', '数据与模型', '参数与资源', '确认启动'];
   const trainingAvailable = gpuEnabled || cpuTrainingEnabled;
@@ -50,17 +57,41 @@ export function TrainingWizardPage() {
   }, [cpuTrainingEnabled, gpuEnabled]);
 
   const compatibleDatasets = useMemo(() => datasets.filter((item) => item.status === '可训练'), [datasets]);
-  const compatibleFormats = trainingDataFormats[draft.type];
-  const selectedDataset = compatibleDatasets.find((item) => item.id === draft.datasetId) ?? compatibleDatasets[0];
+  const modelConfig = findModelVariant(draft.model);
+  const compatibleFormats = modelConfig?.task === draft.type ? modelConfig.dataFormats : trainingDataFormats[draft.type];
+  const selectedDatasetId = draft.datasetId || compatibleDatasets[0]?.id || '';
+  const selectedDataset = compatibleDatasets.find((item) => item.id === selectedDatasetId);
+
+  useEffect(() => {
+    if (!selectedDataset) {
+      setDatasetJobs([]);
+      return;
+    }
+    void annotationJobs(selectedDataset.id).then((jobs) => {
+      setDatasetJobs(jobs);
+      setTrainingScopeState('all');
+      setDraft((current) => ({ ...current, datasetId: selectedDatasetId, jobIds: jobs.filter((job) => job.status === 'approved').map((job) => job.id) }));
+    }).catch(() => setDatasetJobs([]));
+  }, [annotationJobs, selectedDataset?.id, selectedDatasetId]);
+
+  const approvedJobs = datasetJobs.filter((job) => job.status === 'approved');
+  const selectedJobIds = draft.jobIds ?? approvedJobs.map((job) => job.id);
+  const allApprovedSelected = trainingScope === 'all';
+  const setTrainingScope = (scope: 'all' | 'custom') => { setTrainingScopeState(scope); setDraft((current) => ({ ...current, jobIds: scope === 'all' ? approvedJobs.map((job) => job.id) : current.jobIds ?? approvedJobs.map((job) => job.id) })); };
+  const toggleTrainingJob = (jobId: string, checked: boolean) => { setTrainingScopeState('custom'); setDraft((current) => {
+    const currentIds = current.jobIds ?? approvedJobs.map((job) => job.id);
+    const nextIds = checked ? [...new Set([...currentIds, jobId])] : currentIds.filter((id) => id !== jobId);
+    return { ...current, jobIds: nextIds };
+  }); };
 
   const chooseType = (type: TrainingType) => {
     const config = taskTypes.find((item) => item.id === type) ?? taskTypes[0];
     const readyDatasets = datasets.filter((item) => item.status === '可训练');
-    const imageSize = type === 'sdxl' ? 1024 : type === 'keypoint' ? 384 : type === 'segmentation' ? 512 : 640;
+    const model = config.models[0].value;
+    const imageSize = type === 'sdxl' ? 1024 : model.endsWith('-pose') || model.endsWith('-seg') ? 640 : type === 'keypoint' ? 384 : type === 'segmentation' ? 512 : 640;
     const weightSource = 'pretrained';
-    const selectedModel = type === 'detection' ? (gpuEnabled ? 'yolov8m' : 'yolov8n') : config.models[0].value;
-    const architectureVariant = selectedModel.includes('-rk') || selectedModel.includes('-seg') || selectedModel.includes('-pose') || type === 'detection' ? 'rk_compatible' : 'standard';
-    setDraft((current) => ({ ...current, type, dataFormat: trainingDataFormats[type][0], model: selectedModel, architectureVariant, datasetId: readyDatasets[0]?.id ?? '', name: `${config.title}训练`, imageSize, weightSource, batchSize: type === 'sdxl' ? 1 : gpuEnabled ? current.batchSize : Math.min(current.batchSize, 4) }));
+    const selectedModel = type === 'detection' ? (gpuEnabled ? 'yolov8m' : 'yolov8n') : model;
+    setDraft((current) => ({ ...current, type, dataFormat: defaultFormatForModel(type, selectedModel), model: selectedModel, datasetId: readyDatasets[0]?.id ?? '', name: `${config.title}训练`, imageSize, weightSource, batchSize: type === 'sdxl' ? 1 : gpuEnabled ? current.batchSize : Math.min(current.batchSize, 4) }));
   };
 
   const submit = async () => {
@@ -120,10 +151,10 @@ export function TrainingWizardPage() {
               <div className="form-stack">
                 <label className="form-field"><span>任务名称</span><input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
                 <label className="form-field"><span>模型版本</span><input value={draft.version} maxLength={40} placeholder="例如：v1.0.0" onChange={(event) => setDraft((current) => ({ ...current, version: event.target.value }))} /><small>训练成功后将以该版本登记到模型仓库</small></label>
-                <label className="form-field"><span>数据集版本</span><select value={selectedDataset?.id ?? ''} disabled={!compatibleDatasets.length} onChange={(event) => setDraft((current) => ({ ...current, datasetId: event.target.value }))}><option value="">{compatibleDatasets.length ? '请选择数据集' : '暂无已审核数据集'}</option>{compatibleDatasets.map((dataset) => <option value={dataset.id} key={dataset.id}>{dataset.name} · {dataset.version}</option>)}</select></label>
+                <label className="form-field"><span>数据集版本</span><select value={selectedDatasetId} disabled={!compatibleDatasets.length} onChange={(event) => { setTrainingScopeState('all'); setDraft((current) => ({ ...current, datasetId: event.target.value, jobIds: undefined })); }}><option value="">{compatibleDatasets.length ? '请选择数据集' : '暂无已审核数据集'}</option>{compatibleDatasets.map((dataset) => <option value={dataset.id} key={dataset.id}>{dataset.name} · {dataset.version}</option>)}</select></label>
+                {selectedDataset && <fieldset className="training-scope-panel"><legend>训练数据范围</legend><p className="training-scope-description">默认使用该数据集全部审核通过的 Segment/Job，也可以手动选择子集。</p><div className="training-scope-modes" role="radiogroup" aria-label="训练数据范围"><label className={allApprovedSelected ? 'selected' : ''}><input type="radio" name="training-scope" checked={allApprovedSelected} disabled={!approvedJobs.length} onChange={() => setTrainingScope('all')} /><span><strong>全部审核通过</strong><small>{approvedJobs.length} 个 Job 将用于训练</small></span></label><label className={!allApprovedSelected ? 'selected' : ''}><input type="radio" name="training-scope" checked={!allApprovedSelected} disabled={!approvedJobs.length} onChange={() => setTrainingScope('custom')} /><span><strong>自定义选择</strong><small>{selectedJobIds.length} / {approvedJobs.length} 个 Job</small></span></label></div>{approvedJobs.length ? <div className="training-job-picker" aria-label="审核通过的训练 Job">{approvedJobs.map((job) => <label key={job.id} className={selectedJobIds.includes(job.id) ? 'selected' : ''}><input type="checkbox" checked={selectedJobIds.includes(job.id)} onChange={(event) => toggleTrainingJob(job.id, event.target.checked)} /><span><strong>Job #{job.sequence}</strong><small>Segment {job.sequence} · {job.segmentId.slice(-8)}</small></span><Check size={15} /></label>)}</div> : <div className="training-scope-empty"><Database size={17} /><span>当前数据集暂无审核通过的 Job，完成审核后才能创建训练任务。</span></div>}<div className="selection-note"><Database size={17} /><div><strong>{selectedJobIds.length ? `已选择 ${selectedJobIds.length} / ${approvedJobs.length} 个审核通过 Job` : '尚未选择训练 Job'}</strong><span>提交后会冻结为训练快照，后续标注修改不会影响本次训练。</span></div></div></fieldset>}
                 <label className="form-field"><span>数据格式</span><select value={draft.dataFormat} disabled={draft.type === 'sdxl'} onChange={(event) => setDraft((current) => ({ ...current, dataFormat: event.target.value as TrainingDataFormat }))}>{compatibleFormats.map((format) => <option key={format} value={format}>{dataFormatDescriptions[format].label}</option>)}</select><small>{dataFormatDescriptions[draft.dataFormat].description}</small></label>
-                <label className="form-field"><span>基础模型</span><select value={draft.model} onChange={(event) => { const model = event.target.value; setDraft((current) => ({ ...current, model, architectureVariant: model.includes('-rk') || model.includes('-seg') || model.includes('-pose') || model.startsWith('yolov') ? 'rk_compatible' : 'standard' })); }}>{currentTask.models.map((model) => <option key={model.value} value={model.value}>{model.label}</option>)}</select></label>
-                <label className="form-field"><span>架构变体</span><select value={draft.architectureVariant ?? 'standard'} disabled={draft.type === 'sdxl'} onChange={(event) => setDraft((current) => ({ ...current, architectureVariant: event.target.value as TrainingDraft['architectureVariant'] }))}><option value="standard">通用结构</option><option value="rk_compatible" disabled={!(draft.model.startsWith('yolov') || draft.model.endsWith('-rk'))}>RK 友好结构</option></select><small>{draft.architectureVariant === 'rk_compatible' ? '按 Rockchip NPU 兼容路径设计，导出静态 ONNX。' : '通用 PyTorch/ONNX 结构，未承诺 RK 兼容。'}</small></label>
+                <label className="form-field"><span>基础模型</span><select value={draft.model} onChange={(event) => { const model = event.target.value; setDraft((current) => ({ ...current, model, dataFormat: defaultFormatForModel(current.type, model), imageSize: model.endsWith('-pose') || model.endsWith('-seg') ? 640 : current.imageSize })); }}>{currentTask.models.map((model) => <option key={model.value} value={model.value}>{model.label}</option>)}</select></label>
                 <label className="form-field"><span>权重来源</span><select value={draft.weightSource} disabled={draft.type === 'sdxl'} onChange={(event) => setDraft((current) => ({ ...current, weightSource: event.target.value as TrainingDraft['weightSource'] }))}>{draft.type === 'sdxl' ? <option value="pretrained">预置 SDXL Base 模型</option> : <><option value="pretrained">官方预训练权重</option><option value="scratch">从头训练</option></>}</select></label>
               </div>
               <aside className="dataset-snapshot">
@@ -169,7 +200,7 @@ export function TrainingWizardPage() {
             <header className="wizard-section-heading"><span>04</span><div><h2>确认并启动</h2><p>检查任务配置，提交后将进入{gpuEnabled ? ' GPU' : ' CPU'}资源队列。</p></div></header>
             <div className="review-banner"><span className={`choice-icon ${currentTask.color}`}><currentTask.icon size={23} /></span><div><strong>{draft.name}</strong><span>{taskLabels[draft.type]} · {draft.model} · {draft.version}</span></div><span className="neutral-badge">配置完整</span></div>
             <div className="review-grid">
-              <section><header><Database size={17} />数据与模型</header><dl><div><dt>模型版本</dt><dd>{draft.version}</dd></div><div><dt>数据版本</dt><dd>{selectedDataset ? `${selectedDataset.name} ${selectedDataset.version}` : '--'}</dd></div><div><dt>数据格式</dt><dd>{dataFormatDescriptions[draft.dataFormat].label}</dd></div><div><dt>基础模型</dt><dd>{draft.model}</dd></div><div><dt>权重来源</dt><dd>{draft.weightSource === 'scratch' ? '从头训练' : '官方预训练权重'}</dd></div><div><dt>输入尺寸</dt><dd>{draft.imageSize} × {draft.imageSize}</dd></div></dl></section>
+              <section><header><Database size={17} />数据与模型</header><dl><div><dt>模型版本</dt><dd>{draft.version}</dd></div><div><dt>数据版本</dt><dd>{selectedDataset ? `${selectedDataset.name} ${selectedDataset.version}` : '--'}</dd></div><div><dt>训练 Job</dt><dd>{draft.jobIds?.length || approvedJobs.length ? `${draft.jobIds?.length ?? approvedJobs.length} 个审核通过 Job` : '全部审核通过 Job'}</dd></div><div><dt>数据格式</dt><dd>{dataFormatDescriptions[draft.dataFormat].label}</dd></div><div><dt>基础模型</dt><dd>{draft.model}</dd></div><div><dt>权重来源</dt><dd>{draft.weightSource === 'scratch' ? '从头训练' : '官方预训练权重'}</dd></div><div><dt>输入尺寸</dt><dd>{draft.imageSize} × {draft.imageSize}</dd></div></dl></section>
               <section><header><SlidersHorizontal size={17} />训练参数</header><dl><div><dt>训练轮次</dt><dd>{draft.epochs}</dd></div><div><dt>Batch / 学习率</dt><dd>{draft.batchSize} / {draft.learningRate}</dd></div><div><dt>混合精度</dt><dd>{draft.mixedPrecision ? '开启' : '关闭'}</dd></div></dl></section>
               <section><header><Cpu size={17} />计算资源</header><dl><div><dt>设备</dt><dd>{draft.gpu}</dd></div><div><dt>资源状态</dt><dd>提交后排队</dd></div></dl></section>
             </div>

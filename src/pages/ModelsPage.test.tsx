@@ -13,7 +13,7 @@ vi.mock('../context/AppContext', () => ({
     models: [model],
     jobs: [{ id: 'train-1', name: '缺陷检测训练' }],
     conversions: [conversion],
-    session: { accessToken: 'token', user: { id: 'engineer', workspaceId: 'workspace', username: 'engineer', displayName: 'Engineer', role: 'engineer', mustChangePassword: false } },
+    session: { accessToken: 'token', user: { id: 'reviewer', workspaceId: 'workspace', username: 'reviewer', displayName: 'Reviewer', role: 'reviewer', mustChangePassword: false } },
     uploadModel: vi.fn(),
     updateModelStage: vi.fn(),
     deleteModel: mocks.deleteModel,

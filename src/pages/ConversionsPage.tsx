@@ -5,6 +5,7 @@ import { EmptyState, Modal, PageHeader, Pagination, ProgressBar, StatusBadge } f
 import { useApp } from '../context/AppContext';
 import { formatDescriptions } from '../data/catalog';
 import type { ConversionFormat, ConversionTask } from '../types';
+import { effectiveUserRoles } from '../../shared/contracts';
 
 const formats: { id: ConversionFormat; icon: typeof Braces; accent: string }[] = [
   { id: 'ONNX', icon: Braces, accent: 'blue' },
@@ -30,21 +31,21 @@ export function ConversionsPage() {
   const [deleting, setDeleting] = useState(false);
   const { conversions, createConversion, cancelConversion, deleteConversion, downloadArtifact, gpuEnabled, cpuConversionFormats, models, session, notify } = useApp();
   const model = models.find((item) => item.id === sourceId);
-  const rkSource = model?.architectureVariant === 'rk_compatible';
   const target = formatDescriptions[format].target;
   const filteredTasks = useMemo(() => conversions.filter((task) => `${task.modelName}${task.format}${task.target}`.toLowerCase().includes(query.toLowerCase())), [conversions, query]);
   const currentPage = Math.min(page, Math.max(1, Math.ceil(filteredTasks.length / pageSize)));
   const visibleTasks = useMemo(() => filteredTasks.slice((currentPage - 1) * pageSize, currentPage * pageSize), [currentPage, filteredTasks, pageSize]);
-  const canDelete = session?.user.role === 'admin' || session?.user.role === 'engineer';
+  const userRoles = session ? effectiveUserRoles(session.user) : [];
+  const canDelete = userRoles.includes('admin') || userRoles.includes('reviewer');
   const sdxlBlocked = model?.task === 'sdxl' && !gpuEnabled;
   const conversionAllowed = !sdxlBlocked && (gpuEnabled || cpuConversionFormats.includes(format));
 
   useEffect(() => {
     setPrecision(gpuEnabled ? formatDescriptions[format].defaultPrecision : 'FP32');
-    const defaults = format === 'ONNX' ? [rkSource ? '13' : '18', rkSource ? 'batch-1' : 'dynamic'] : format === 'TensorRT' ? ['NVIDIA T4', '4 GB'] : format === 'TorchScript' ? ['trace', 'inference'] : ['Intel CPU', 'latency'];
+    const defaults = format === 'ONNX' ? ['18', 'dynamic'] : format === 'TensorRT' ? ['NVIDIA T4', '4 GB'] : format === 'TorchScript' ? ['trace', 'inference'] : ['Intel CPU', 'latency'];
     setOptionA(defaults[0]);
     setOptionB(defaults[1]);
-  }, [format, gpuEnabled, rkSource]);
+  }, [format, gpuEnabled]);
 
   useEffect(() => {
     if ((!sourceId || !models.some((item) => item.id === sourceId)) && models[0]) setSourceId(models[0].id);
@@ -93,7 +94,7 @@ export function ConversionsPage() {
         <header className="section-header conversion-header"><div><span className="section-number">01</span><div><h2>创建转换任务</h2><p>选择源模型、目标格式和运行环境。</p></div></div></header>
         <div className="conversion-source-row">
           <label className="form-field"><span>源模型版本</span><select value={model?.id ?? ''} disabled={!models.length} onChange={(event) => setSourceId(event.target.value)}><option value="">{models.length ? '请选择模型' : '暂无可用模型'}</option>{models.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.version}</option>)}</select></label>
-          {model && <div className="source-model-summary"><span className={`model-glyph ${model.task}`}><Box size={19} /></span><div><small>{model.framework}</small><strong>{model.metricName} {model.metricValue}</strong></div><div><small>原始大小</small><strong>{model.size}</strong></div><div><small>架构</small><strong>{rkSource ? 'RK 友好' : '通用'}</strong></div><span className="neutral-badge">{model.stage}</span></div>}
+          {model && <div className="source-model-summary"><span className={`model-glyph ${model.task}`}><Box size={19} /></span><div><small>{model.framework}</small><strong>{model.metricName} {model.metricValue}</strong></div><div><small>原始大小</small><strong>{model.size}</strong></div><span className="neutral-badge">{model.stage}</span></div>}
           {!model && <EmptyState icon={PackageOpen} title="暂无源模型" description="训练并登记模型后即可创建转换任务。" />}
         </div>
 
@@ -113,7 +114,7 @@ export function ConversionsPage() {
             <header><Settings2 size={18} /><div><strong>{format} 配置</strong><span>已应用兼容的推荐值</span></div></header>
             <div className="form-grid three">
               <label className="form-field"><span>精度</span><select value={precision} onChange={(event) => setPrecision(event.target.value)}><option>FP32</option>{gpuEnabled && <option>FP16</option>}</select></label>
-              {format === 'ONNX' && <><label className="form-field"><span>Opset</span><select value={optionA} onChange={(event) => setOptionA(event.target.value)}>{rkSource ? <><option>12</option><option>13</option></> : <><option>17</option><option>18</option><option>19</option></>}</select></label><label className="form-field"><span>输入批次</span><select value={optionB} onChange={(event) => setOptionB(event.target.value)}><option value="dynamic" disabled={rkSource}>动态批次</option><option value="batch-1">固定批次 1</option><option value="batch-8" disabled={rkSource}>固定批次 8</option></select></label></>}
+              {format === 'ONNX' && <><label className="form-field"><span>Opset</span><select value={optionA} onChange={(event) => setOptionA(event.target.value)}><option>17</option><option>18</option><option>19</option></select></label><label className="form-field"><span>输入批次</span><select value={optionB} onChange={(event) => setOptionB(event.target.value)}><option value="dynamic">动态批次</option><option value="batch-1">固定批次 1</option><option value="batch-8">固定批次 8</option></select></label></>}
               {format === 'TensorRT' && <><label className="form-field"><span>目标 GPU</span><select value={optionA} onChange={(event) => setOptionA(event.target.value)}><option>NVIDIA T4</option><option>Jetson Orin</option><option>Hopper</option></select></label><label className="form-field"><span>Workspace</span><select value={optionB} onChange={(event) => setOptionB(event.target.value)}><option>4 GB</option><option>8 GB</option><option>16 GB</option></select></label></>}
               {format === 'TorchScript' && <><label className="form-field"><span>转换模式</span><select value={optionA} onChange={(event) => setOptionA(event.target.value)}><option value="trace">Trace</option><option value="script">Script</option></select></label><label className="form-field"><span>优化级别</span><select value={optionB} onChange={(event) => setOptionB(event.target.value)}><option value="inference">推理优化</option><option value="mobile">移动端优化</option></select></label></>}
               {format === 'OpenVINO' && <><label className="form-field"><span>目标设备</span><select value={optionA} onChange={(event) => setOptionA(event.target.value)}><option>Intel CPU</option><option>Intel GPU</option><option>Intel NPU</option></select></label><label className="form-field"><span>性能提示</span><select value={optionB} onChange={(event) => setOptionB(event.target.value)}><option value="latency">低延迟</option><option value="throughput">高吞吐</option></select></label></>}
@@ -123,7 +124,7 @@ export function ConversionsPage() {
           <aside className="conversion-estimate">
             <header><Gauge size={18} /><strong>转换摘要</strong></header>
             <dl><div><dt>源模型</dt><dd>{model ? `${model.name} ${model.version}` : '--'}</dd></div><div><dt>目标环境</dt><dd>{target}</dd></div><div><dt>目标格式</dt><dd>{format}</dd></div><div><dt>精度</dt><dd>{precision}</dd></div></dl>
-            <div className="compatibility-ok"><Info size={15} />{sdxlBlocked ? 'SDXL LoRA 融合与 UNet 转换需要 CUDA GPU Worker' : rkSource && format === 'ONNX' ? 'RK 友好 ONNX：静态 batch 1、NCHW、Opset 12/13，后处理在运行时执行' : gpuEnabled ? '兼容性与产物信息将在转换任务执行后返回' : 'CPU 模式支持 FP32 ONNX、TorchScript 与 OpenVINO'}</div>
+            <div className="compatibility-ok"><Info size={15} />{sdxlBlocked ? 'SDXL LoRA 融合与 UNet 转换需要 CUDA GPU Worker' : gpuEnabled ? '兼容性与产物信息将在转换任务执行后返回' : 'CPU 模式支持 FP32 ONNX、TorchScript 与 OpenVINO'}</div>
             <button className="button primary full-width" disabled={!conversionAllowed || !model} onClick={submit}>{conversionAllowed ? '创建转换任务' : '需要 GPU Worker'} <ArrowRight size={16} /></button>
           </aside>
         </div>

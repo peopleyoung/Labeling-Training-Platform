@@ -3,10 +3,12 @@ import {
   Bell,
   Boxes,
   Braces,
+  ClipboardList,
   ChevronDown,
   CircleHelp,
   Database,
   Gauge,
+  LogOut,
   Menu,
   Search,
   Settings,
@@ -16,10 +18,13 @@ import {
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { Modal } from './ui';
+import { effectiveUserRoles } from '../../shared/contracts';
+import { guideRoleFor, roleGuides } from '../data/roleGuides';
 
 const navItems = [
   { to: '/', label: '工作台', icon: Gauge, end: true },
   { to: '/datasets', label: '数据中心', icon: Database },
+  { to: '/tasks', label: '标注任务', icon: ClipboardList },
   { to: '/training', label: '训练中心', icon: Sparkles },
   { to: '/models', label: '模型仓库', icon: Boxes },
   { to: '/conversions', label: '转换中心', icon: Braces },
@@ -33,17 +38,21 @@ export function AppShell() {
   const { session, apiEnabled, gpuEnabled, cpuTrainingEnabled, cpuOnnxEnabled, datasets, jobs, models, conversions, logout } = useApp();
   const navigate = useNavigate();
   const user = session?.user;
-  const roleLabel = user?.role === 'admin' ? '管理员' : user?.role === 'annotator' ? '标注员' : '算法工程师';
+  const userRoles = user ? effectiveUserRoles(user) : [];
+  const isAdmin = userRoles.includes('admin');
+  const guide = roleGuides[guideRoleFor(userRoles)];
+  const roleLabel = userRoles.map((role) => role === 'admin' ? '管理员' : role === 'annotator' ? '标注员' : '审核员').join(' / ') || '审核员';
+  const visibleNavItems = navItems.filter(({ to }) => userRoles.includes('admin') || userRoles.includes('reviewer') || to === '/datasets');
   const failedTasks = [...jobs, ...conversions].filter((task) => task.status === 'failed');
   const searchResults = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return [];
     return [
-      ...datasets.filter((item) => `${item.name}${item.description}`.toLowerCase().includes(query)).map((item) => ({ id: item.id, title: item.name, subtitle: `数据集 · ${item.version}`, path: '/datasets' })),
+      ...datasets.filter((item) => `${item.name}${item.description}`.toLowerCase().includes(query)).map((item) => ({ id: item.id, title: item.name, subtitle: `数据集 · ${item.version}`, path: isAdmin ? '/tasks' : '/datasets' })),
       ...jobs.filter((item) => `${item.name}${item.model}${item.dataset}`.toLowerCase().includes(query)).map((item) => ({ id: item.id, title: item.name, subtitle: `训练任务 · ${item.status}`, path: `/training/${item.id}` })),
       ...models.filter((item) => `${item.name}${item.version}${item.framework}`.toLowerCase().includes(query)).map((item) => ({ id: item.id, title: `${item.name} ${item.version}`, subtitle: `模型 · ${item.stage}`, path: '/models' })),
     ].slice(0, 12);
-  }, [datasets, jobs, models, searchQuery]);
+  }, [datasets, isAdmin, jobs, models, searchQuery]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -77,7 +86,7 @@ export function AppShell() {
         </div>
 
         <nav className="main-nav" aria-label="主导航">
-          {navItems.map(({ to, label, icon: Icon, end }) => (
+          {visibleNavItems.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
@@ -94,12 +103,16 @@ export function AppShell() {
         <div className="sidebar-spacer" />
         <nav className="utility-nav" aria-label="辅助导航">
           <button onClick={() => setUtilityModal('help')}><CircleHelp size={18} />帮助与文档</button>
-          <button onClick={() => setUtilityModal('settings')}><Settings size={18} />系统设置</button>
+          {userRoles.includes('admin') && <NavLink className="utility-link" to="/admin"><Settings size={18} /><span>系统管理</span></NavLink>}
         </nav>
         <div className="sidebar-user">
-          <div className="user-avatar">{user?.displayName.slice(0, 1) ?? '本'}</div>
-          <div><span>{user?.displayName ?? '本地开发'}</span><small>{roleLabel}</small></div>
-          {apiEnabled && <button className="icon-button" title="退出登录" aria-label="退出登录" onClick={logout}><ChevronDown size={16} /></button>}
+          <details className="sidebar-user-menu">
+            <summary className="sidebar-user-trigger" aria-label="用户菜单" title="用户菜单">
+              <span className="sidebar-user-identity"><span>{user?.displayName ?? '本地开发'}</span><small>{roleLabel}</small></span>
+              <ChevronDown className="sidebar-user-chevron" size={16} />
+            </summary>
+            {apiEnabled && <div className="sidebar-user-menu-panel" role="menu"><span>{user?.displayName ?? '本地开发'}</span><button type="button" role="menuitem" onClick={logout}><LogOut size={16} />退出登录</button></div>}
+          </details>
         </div>
       </aside>
 
@@ -128,7 +141,7 @@ export function AppShell() {
         </main>
       </div>
       {searchOpen && <Modal title="全局搜索" description="查找数据集、训练任务和模型版本。" onClose={() => setSearchOpen(false)} footer={<button className="button secondary" onClick={() => setSearchOpen(false)}>关闭</button>}><label className="toolbar-search global-search-input"><Search size={17} /><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="输入名称、模型或数据集" /></label><div className="global-search-results">{searchResults.map((result) => <button key={`${result.path}:${result.id}`} onClick={() => openResult(result.path)}><span><strong>{result.title}</strong><small>{result.subtitle}</small></span><ChevronDown size={16} /></button>)}{searchQuery && !searchResults.length && <p className="empty-inline">没有匹配结果</p>}</div></Modal>}
-      {utilityModal === 'help' && <Modal title="帮助与文档" description="工业质检模型生产流程" onClose={() => setUtilityModal(null)} footer={<button className="button primary" onClick={() => setUtilityModal(null)}>关闭</button>}><div className="help-grid"><div><strong>数据与标注</strong><span>在数据中心创建数据集、上传图像，并进入标注工作台绘制矩形、多边形或关键点。</span></div><div><strong>训练与转换</strong><span>CPU 环境支持训练和 FP32 ONNX 转换；GPU Worker 启用后开放全部转换格式。</span></div><div><strong>产物交付</strong><span>完成的导出、训练和转换任务会登记制品，可通过对应列表下载。</span></div></div></Modal>}
+      {utilityModal === 'help' && <Modal title={`帮助与文档 · ${guide.roleLabel}`} description={guide.title} width="large" className="role-help-modal" onClose={() => setUtilityModal(null)} footer={<button className="button primary" onClick={() => setUtilityModal(null)}>关闭</button>}><div className="role-guide"><header className="role-guide-intro"><span>{guide.roleLabel}</span><h3>{guide.title}</h3><p>{guide.summary}</p></header><div className="role-guide-sections">{guide.sections.map((section) => <section className="role-guide-section" key={section.title}><h3>{section.title}</h3><p>{section.summary}</p><ol>{section.steps.map((step) => <li key={step}>{step}</li>)}</ol>{section.notes?.map((note) => <div className="role-guide-note" key={note}>{note}</div>)}</section>)}</div></div></Modal>}
       {utilityModal === 'settings' && <Modal title="系统设置" description="当前单租户部署的只读运行配置" onClose={() => setUtilityModal(null)} footer={<button className="button primary" onClick={() => setUtilityModal(null)}>关闭</button>}><dl className="config-grid"><div><dt>部署模式</dt><dd>企业内网 · 单租户</dd></div><div><dt>计算能力</dt><dd>{gpuEnabled ? 'GPU Worker 已启用' : cpuTrainingEnabled ? 'CPU Worker 已启用' : '数据处理模式'}</dd></div><div><dt>CPU 模型转换</dt><dd>{cpuOnnxEnabled ? 'ONNX / TorchScript / OpenVINO' : '未启用'}</dd></div><div><dt>API 连接</dt><dd>{apiEnabled ? '已启用' : '本地模式'}</dd></div><div><dt>当前角色</dt><dd>{roleLabel}</dd></div></dl></Modal>}
       {utilityModal === 'notifications' && <Modal title="任务通知" description={failedTasks.length ? `${failedTasks.length} 个任务需要处理` : '当前没有异常任务'} onClose={() => setUtilityModal(null)} footer={<button className="button primary" onClick={() => setUtilityModal(null)}>关闭</button>}><div className="notification-list">{failedTasks.map((task) => <div key={task.id}><AlertTask /><span><strong>{'name' in task ? task.name : `${task.modelName} ${task.format}`}</strong><small>{task.errorMessage ?? '执行失败，请查看任务详情'}</small></span></div>)}{!failedTasks.length && <p className="empty-inline">所有任务状态正常</p>}</div></Modal>}
     </div>

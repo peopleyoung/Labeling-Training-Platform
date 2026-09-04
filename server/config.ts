@@ -53,7 +53,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     objectStorageEndpoint: env.S3_ENDPOINT,
     objectStorageBucket: env.S3_BUCKET ?? 'forge-artifacts',
     objectStorageRegion: env.S3_REGION ?? 'us-east-1',
-    artifactRoot: env.FORGE_ARTIFACT_ROOT ?? '/data/artifacts',
+    artifactRoot: env.FORGE_ARTIFACT_ROOT ?? './data/artifacts',
     gpuEnabled,
     cpuTrainingEnabled,
     cpuOnnxEnabled,

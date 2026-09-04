@@ -32,7 +32,7 @@ const jobs = [
 vi.mock('../context/AppContext', () => ({
   useApp: () => ({
     jobs,
-    session: { accessToken: 'token', user: { id: 'engineer', workspaceId: 'workspace', username: 'engineer', displayName: 'Engineer', role: 'engineer', mustChangePassword: false } },
+    session: { accessToken: 'token', user: { id: 'reviewer', workspaceId: 'workspace', username: 'reviewer', displayName: 'Reviewer', role: 'reviewer', mustChangePassword: false } },
     retryTrainingJob: vi.fn(),
     deleteTrainingJob: mocks.deleteTrainingJob,
     notify: mocks.notify,

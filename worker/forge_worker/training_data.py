@@ -27,26 +27,20 @@ def split_images(manifest: Dict[str, Any], split: str) -> List[Dict[str, Any]]:
     return images
 
 
-def _normalized_image(path: str, image_size: int, normalization: str = "imagenet") -> torch.Tensor:
+def _normalized_image(path: str, image_size: int) -> torch.Tensor:
     image = Image.open(path).convert("RGB").resize((image_size, image_size), Image.Resampling.BILINEAR)
-    pixels = np.asarray(image, dtype=np.float32)
+    pixels = np.asarray(image, dtype=np.float32) / 255.0
     tensor = torch.from_numpy(pixels).permute(2, 0, 1)
-    if normalization == "rknn":
-        return (tensor - 127.5) / 127.5
-    if normalization != "imagenet":
-        raise RuntimeError(f"Unsupported image normalization: {normalization}")
-    tensor = tensor / 255.0
     mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
     std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
     return (tensor - mean) / std
 
 
 class SegmentationDataset(Dataset):
-    def __init__(self, items: List[Dict[str, Any]], classes: List[str], image_size: int, normalization: str = "imagenet"):
+    def __init__(self, items: List[Dict[str, Any]], classes: List[str], image_size: int):
         self.items = items
         self.classes = classes
         self.image_size = image_size
-        self.normalization = normalization
 
     def __len__(self) -> int:
         return len(self.items)
@@ -58,7 +52,7 @@ class SegmentationDataset(Dataset):
             values = np.asarray(mask, dtype=np.int64).copy()
             if values.size and int(values.max()) > len(self.classes):
                 raise RuntimeError("PNG mask contains a class id outside classes.json")
-            return _normalized_image(item["path"], self.image_size, self.normalization), torch.from_numpy(values)
+            return _normalized_image(item["path"], self.image_size), torch.from_numpy(values)
         mask = Image.new("L", (self.image_size, self.image_size), 0)
         draw = ImageDraw.Draw(mask)
         for annotation in item.get("annotations", []):
@@ -76,7 +70,7 @@ class SegmentationDataset(Dataset):
                 points = [(round(float(point["x"]) * self.image_size / 100), round(float(point["y"]) * self.image_size / 100)) for point in geometry.get("points", [])]
                 if len(points) >= 3:
                     draw.polygon(points, fill=class_id)
-        return _normalized_image(item["path"], self.image_size, self.normalization), torch.from_numpy(np.asarray(mask, dtype=np.int64).copy())
+        return _normalized_image(item["path"], self.image_size), torch.from_numpy(np.asarray(mask, dtype=np.int64).copy())
 
 
 class KeypointDataset(Dataset):

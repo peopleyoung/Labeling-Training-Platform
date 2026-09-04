@@ -2,21 +2,19 @@
 
 import os
 
-from forge_worker.runner import build_conversion_command, build_training_command, validate_training_config
+from forge_worker.runner import build_conversion_command, build_training_command, ensure_ultralytics_pretrained_model, validate_training_config
 
 
 TRAINING_PROFILES = [
     ("detection", "yolov5m", 640, 8),
     ("detection", "yolov8m", 640, 8),
-    ("instance_segmentation", "yolov8m-seg", 640, 4),
+    ("segmentation", "yolov8m-seg", 640, 4),
     ("segmentation", "segformer-b2", 512, 4),
     ("segmentation", "unet", 512, 8),
     ("segmentation", "deeplabv3plus-resnet50", 512, 4),
-    ("segmentation", "deeplabv3plus-mobilenetv2", 512, 8),
-    ("segmentation", "deeplabv3plus-mobilenetv2-rk", 512, 8),
+    ("keypoint", "yolov8m-pose", 640, 4),
     ("keypoint", "hrnet-w32", 384, 8),
     ("keypoint", "higherhrnet-w32", 512, 4),
-    ("keypoint", "yolov8m-pose", 640, 4),
 ]
 
 SDXL_PROFILES = [
@@ -26,10 +24,32 @@ SDXL_PROFILES = [
 
 
 def main() -> None:
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="forge-weight-cache-") as directory:
+        cache = Path(directory)
+        cached_weight = cache / "yolov8n-seg.pt"
+        cached_weight.write_bytes(b"0" * 100_000)
+        assert ensure_ultralytics_pretrained_model("yolov8n-seg", "yolov8-seg", directory) == cached_weight.resolve()
+        previous_offline = os.environ.get("FORGE_PRETRAINED_OFFLINE")
+        os.environ["FORGE_PRETRAINED_OFFLINE"] = "true"
+        try:
+            try:
+                ensure_ultralytics_pretrained_model("yolov8n-pose", "yolov8-pose", directory)
+            except ValueError as error:
+                assert "不在模型库中" in str(error)
+            else:
+                raise AssertionError("offline pretrained cache miss unexpectedly succeeded")
+        finally:
+            if previous_offline is None:
+                os.environ.pop("FORGE_PRETRAINED_OFFLINE", None)
+            else:
+                os.environ["FORGE_PRETRAINED_OFFLINE"] = previous_offline
+
     for task_type, model, image_size, batch_size in TRAINING_PROFILES:
-        data_format = {"detection": "YOLO", "instance_segmentation": "YOLO_SEG", "segmentation": "COCO_SEGMENTATION", "keypoint": "COCO_KEYPOINTS"}[task_type]
-        architecture_variant = "rk_compatible" if model.endswith("-rk") or "yolo" in model else "standard"
-        config = {"type": task_type, "dataFormat": data_format, "model": model, "architectureVariant": architecture_variant, "weightSource": "pretrained", "epochs": 3, "batchSize": batch_size, "imageSize": image_size, "mixedPrecision": True}
+        data_format = {"detection": "YOLO", "segmentation": "YOLO_SEGMENTATION" if model.endswith("-seg") else "COCO_SEGMENTATION", "keypoint": "YOLO_KEYPOINTS" if model.endswith("-pose") else "COCO_KEYPOINTS"}[task_type]
+        config = {"type": task_type, "dataFormat": data_format, "model": model, "weightSource": "pretrained", "epochs": 3, "batchSize": batch_size, "imageSize": image_size, "mixedPrecision": True}
         validate_training_config(config)
         command = build_training_command(config, "/data/dataset.yaml", "/data/output")
         if model.startswith(("yolov5", "yolov8")):
@@ -57,9 +77,10 @@ def main() -> None:
             config = {"type": task_type, "dataFormat": "IMAGE_FOLDER", "model": model, "weightSource": "pretrained", "epochs": 3, "batchSize": batch_size, "imageSize": image_size, "mixedPrecision": True}
             command = build_training_command(config, "/data/dataset.json", "/data/output")
             assert "forge_worker.train_sdxl" in command.command
-    for model, expected in [("yolov5n", "model=yolov5nu.yaml"), ("yolov8n", "model=yolov8n.yaml")]:
-        command = build_training_command({"type": "detection", "dataFormat": "YOLO", "model": model, "weightSource": "scratch", "epochs": 1, "batchSize": 1, "imageSize": 128, "mixedPrecision": False}, "/data/dataset.yaml", "/data/output")
+    for model, expected, task, task_type, data_format in [("yolov5n", "model=yolov5nu.yaml", "detect", "detection", "YOLO"), ("yolov8n", "model=yolov8n.yaml", "detect", "detection", "YOLO"), ("yolov8n-seg", "model=yolov8n-seg.yaml", "segment", "segmentation", "YOLO_SEGMENTATION"), ("yolov8n-pose", "model=yolov8n-pose.yaml", "pose", "keypoint", "YOLO_KEYPOINTS")]:
+        command = build_training_command({"type": task_type, "dataFormat": data_format, "model": model, "weightSource": "scratch", "epochs": 1, "batchSize": 1, "imageSize": 128, "mixedPrecision": False}, "/data/dataset.yaml", "/data/output")
         assert expected in command.command
+        assert task in command.command
         assert "pretrained=False" in command.command
         assert "plots=False" in command.command
     for format_name, precision, target in [("ONNX", "FP16", "NVIDIA GPU"), ("TensorRT", "FP16", "NVIDIA T4"), ("TorchScript", "FP16", "NVIDIA GPU"), ("OpenVINO", "FP16", "Intel CPU")]:
@@ -67,9 +88,6 @@ def main() -> None:
         assert "--model-family" in command.command
         assert "yolov8" in command.command
         print(f"conversion {format_name}: {' '.join(command.command[:4])}")
-    rk_command = build_conversion_command({"format": "ONNX", "precision": "FP32", "target": "通用 CPU / GPU", "modelFamily": "deeplabv3plus", "architectureVariant": "rk_compatible", "optionA": "13", "optionB": "batch-1", "inputShape": "1,3,512,512"}, "/data/model.pt", "/data/output")
-    assert "--opset" in rk_command.command and "13" in rk_command.command
-    assert "--dynamic-batch" not in rk_command.command
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
-export const userRoles = ['admin', 'engineer', 'annotator'] as const;
+export const userRoles = ['admin', 'reviewer', 'annotator'] as const;
 export type UserRole = (typeof userRoles)[number];
 
-export const trainingTypes = ['detection', 'segmentation', 'instance_segmentation', 'keypoint', 'sdxl'] as const;
+export const trainingTypes = ['detection', 'segmentation', 'keypoint', 'sdxl'] as const;
 export type TrainingType = (typeof trainingTypes)[number];
 
 export const jobStatuses = ['queued', 'running', 'completed', 'failed', 'cancelled'] as const;
@@ -10,36 +10,18 @@ export type JobStatus = (typeof jobStatuses)[number];
 export const conversionFormats = ['ONNX', 'TensorRT', 'TorchScript', 'OpenVINO'] as const;
 export type ConversionFormat = (typeof conversionFormats)[number];
 
-export const dataFormats = ['YOLO', 'COCO', 'VOC', 'COCO_SEGMENTATION', 'PNG_MASK', 'YOLO_SEG', 'COCO_KEYPOINTS', 'IMAGE_FOLDER'] as const;
+export const dataFormats = ['YOLO', 'COCO', 'VOC', 'YOLO_SEGMENTATION', 'COCO_SEGMENTATION', 'PNG_MASK', 'YOLO_KEYPOINTS', 'COCO_KEYPOINTS', 'IMAGE_FOLDER', 'CVAT_JSON', 'CVAT_XML'] as const;
 export type DataFormat = (typeof dataFormats)[number];
 export type TrainingDataFormat = DataFormat;
 
 export const trainingDataFormats = {
   detection: ['YOLO', 'COCO', 'VOC'],
-  segmentation: ['COCO_SEGMENTATION', 'PNG_MASK'],
-  instance_segmentation: ['YOLO_SEG'],
-  keypoint: ['COCO_KEYPOINTS'],
+  segmentation: ['YOLO_SEGMENTATION', 'COCO_SEGMENTATION', 'PNG_MASK'],
+  keypoint: ['YOLO_KEYPOINTS', 'COCO_KEYPOINTS'],
   sdxl: ['IMAGE_FOLDER'],
 } as const satisfies Record<TrainingType, readonly TrainingDataFormat[]>;
 
-export const architectureVariants = ['standard', 'rk_compatible'] as const;
-export type ArchitectureVariant = (typeof architectureVariants)[number];
-
-export const rkCompatibilityStatuses = ['not_reviewed', 'standard_only', 'rk_structure_ready', 'onnx_validated', 'device_validated'] as const;
-export type RkCompatibilityStatus = (typeof rkCompatibilityStatuses)[number];
-
-export const outputProtocols = ['segmentation_logits', 'yolo_detection', 'yolo_segmentation', 'yolo_pose', 'heatmap', 'sdxl_unet'] as const;
-export type OutputProtocol = (typeof outputProtocols)[number];
-
-export interface ModelVariantMetadata {
-  architectureVariant: ArchitectureVariant;
-  targetFamily?: 'rockchip_npu';
-  rkCompatibilityStatus: RkCompatibilityStatus;
-  outputProtocol: OutputProtocol;
-  supportedOpset?: number;
-}
-
-export const annotationTypes = ['rectangle', 'polygon', 'keypoint', 'polyline', 'ellipse', 'skeleton'] as const;
+export const annotationTypes = ['rectangle', 'polygon', 'keypoint', 'polyline', 'ellipse', 'skeleton', 'cuboid'] as const;
 export type AnnotationType = (typeof annotationTypes)[number];
 
 export const annotationReviewStatuses = ['draft', 'submitted', 'approved', 'rejected'] as const;
@@ -49,6 +31,116 @@ export const annotationReviewDecisions = ['approve', 'reject'] as const;
 export type AnnotationReviewDecision = (typeof annotationReviewDecisions)[number];
 
 export type DatasetType = '目标检测' | '语义分割' | '关键点';
+export const annotationTaskStatuses = ['draft', 'processing', 'ready', 'annotating', 'reviewing', 'paused', 'completed', 'cancelled'] as const;
+export type AnnotationTaskStatus = (typeof annotationTaskStatuses)[number];
+export interface AnnotationTask {
+  id: string;
+  datasetId: string;
+  name: string;
+  status: AnnotationTaskStatus;
+  createdAt: string;
+}
+export const sourceAssetTypes = ['image', 'archive', 'video'] as const;
+export type SourceAssetType = (typeof sourceAssetTypes)[number];
+export const uploadStatuses = ['created', 'uploading', 'uploaded', 'upload_failed', 'cancelled'] as const;
+export type UploadStatus = (typeof uploadStatuses)[number];
+
+export interface SourceAsset {
+  id: string;
+  datasetId: string;
+  type: SourceAssetType;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256?: string;
+  objectKey?: string;
+  relativePath?: string;
+  uploadStatus: UploadStatus;
+  processingStatus: 'pending' | 'processing' | 'processed' | 'partial_failed' | 'failed';
+  processingError?: string;
+  createdAt: string;
+}
+
+export const processingRunStatuses = ['queued', 'running', 'completed', 'partial_failed', 'failed', 'cancelled'] as const;
+export type ProcessingRunStatus = (typeof processingRunStatuses)[number];
+export type FrameExtractionStrategy = 'fps' | 'interval_ms' | 'frame_step' | 'keyframe';
+export interface DatasetProcessingConfig {
+  segmentSize: number;
+  extractionStrategy: FrameExtractionStrategy;
+  frameStep: number;
+  startFrame?: number;
+  endFrame?: number;
+  imageQuality: number;
+  overlapSize: number;
+  blockSize?: number;
+  useZipBlocks: boolean;
+  zOrder: boolean;
+}
+export interface ProcessingRun {
+  id: string;
+  datasetId: string;
+  sourceAssetId?: string;
+  status: ProcessingRunStatus;
+  progress: number;
+  extractionStrategy?: FrameExtractionStrategy;
+  frameStep?: number;
+  startFrame?: number;
+  endFrame?: number;
+  segmentSize?: number;
+  imageQuality?: number;
+  overlapSize?: number;
+  blockSize?: number;
+  useZipBlocks?: boolean;
+  zOrder?: boolean;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AnnotationSegment {
+  id: string;
+  datasetId: string;
+  annotationTaskId: string;
+  sourceAssetId?: string;
+  sequence: number;
+  startItemId: string;
+  endItemId: string;
+  itemCount: number;
+  createdAt: string;
+}
+
+export const annotationJobStatuses = ['available', 'claimed', 'in_progress', 'submitted', 'reviewing', 'approved', 'rework', 'cancelled'] as const;
+export type AnnotationJobStatus = (typeof annotationJobStatuses)[number];
+export interface AnnotationJob {
+  id: string;
+  datasetId: string;
+  annotationTaskId: string;
+  segmentId: string;
+  sequence: number;
+  status: AnnotationJobStatus;
+  assigneeId?: string;
+  claimedAt?: string;
+  submittedAt?: string;
+  reviewedAt?: string;
+  reviewerId?: string;
+  reviewComment?: string;
+  createdAt: string;
+}
+
+export interface UploadSession {
+  id: string;
+  datasetId: string;
+  assetId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  partSize: number;
+  totalParts: number;
+  completedParts: number[];
+  status: UploadStatus;
+  createdAt: string;
+  expiresAt: string;
+}
 
 export interface ApiErrorBody {
   code: string;
@@ -68,13 +160,30 @@ export interface RuntimeCapabilities {
   cpuConversionFormats: ConversionFormat[];
 }
 
+export interface SystemSettings {
+  uploadMaxBytes: number;
+  defaultImageSegmentSize: number;
+  defaultVideoSegmentSize: number;
+  autosaveIntervalSeconds: number;
+  retentionDays: number;
+  allowedVideoFormats: string[];
+}
+
 export interface AuthUser {
   id: string;
   workspaceId: string;
   username: string;
   displayName: string;
   role: UserRole;
+  roles?: UserRole[];
   mustChangePassword: boolean;
+  enabled?: boolean;
+}
+
+export const roleAliases: Record<UserRole, UserRole> = { admin: 'admin', reviewer: 'reviewer', annotator: 'annotator' };
+
+export function effectiveUserRoles(user: Pick<AuthUser, 'role' | 'roles'>): UserRole[] {
+  return [roleAliases[user.role]];
 }
 
 export interface WorkspaceActivity {
@@ -103,9 +212,23 @@ export interface Dataset {
   images: number;
   annotated: number;
   classes: string[];
+  labels?: DatasetLabel[];
   updatedAt: string;
   size: string;
   status: '标注中' | '可训练' | '待审核';
+  annotatorIds?: string[];
+  reviewerIds?: string[];
+  processingConfig?: DatasetProcessingConfig;
+}
+
+export type DatasetLabelAttributeType = 'enum' | 'boolean' | 'integer' | 'text';
+export interface DatasetLabelAttribute { name: string; type: DatasetLabelAttributeType; values?: string[]; required?: boolean; }
+export interface DatasetLabel { name: string; color: string; attributes: DatasetLabelAttribute[]; }
+
+export interface DatasetDeletionPreview {
+  resourceId: string;
+  counts: { assets: number; images: number; annotations: number; segments: number; jobs: number; exports: number; trainingJobs: number; models: number };
+  releasedBytes: number;
 }
 
 export interface DatasetImage {
@@ -114,6 +237,13 @@ export interface DatasetImage {
   filename: string;
   mimeType: string;
   sizeBytes: number;
+  sourceAssetId?: string;
+  sourceRelativePath?: string;
+  sourceFrameNumber?: number;
+  sourceTimestampMs?: number;
+  extractionOrder?: number;
+  thumbnailObjectKey?: string;
+  processingRunId?: string;
   width?: number;
   height?: number;
   split: 'train' | 'validation' | 'test';
@@ -133,19 +263,61 @@ export interface AnnotationKeypoint extends AnnotationPoint {
 export type AnnotationGeometry =
   | { type: 'rectangle'; x: number; y: number; width: number; height: number }
   | { type: 'polygon'; points: AnnotationPoint[] }
-  | { type: 'keypoint'; x: number; y: number; index: number; visibility?: 0 | 1 | 2 }
+  | { type: 'keypoint'; x: number; y: number; index: number }
   | { type: 'polyline'; points: AnnotationPoint[]; strokeWidth: number }
   | { type: 'ellipse'; cx: number; cy: number; rx: number; ry: number; rotation: number }
-  | { type: 'skeleton'; points: AnnotationKeypoint[]; edges: Array<[number, number]> };
+  | { type: 'skeleton'; points: AnnotationKeypoint[]; edges: Array<[number, number]> }
+  | { type: 'cuboid'; points: AnnotationPoint[] };
 
 export interface AnnotationRecord {
   id: string;
   label: string;
   color: string;
   geometry: AnnotationGeometry;
-  /** Optional instance grouping used by YOLO-Seg and multi-instance pose data. */
-  instanceId?: string;
   locked?: boolean;
+  occluded?: boolean;
+  outside?: boolean;
+  zOrder?: number;
+  attributes?: Record<string, string | number | boolean>;
+  trackId?: string;
+  keyframe?: boolean;
+  provenance?: 'manual' | 'interpolated' | 'copied';
+  flagged?: boolean;
+  createdBy?: string;
+  createdByRole?: UserRole;
+  createdAt?: string;
+  updatedBy?: string;
+  updatedByRole?: UserRole;
+  updatedAt?: string;
+}
+
+export type AnnotationAuditChangeType = 'created' | 'updated' | 'deleted';
+
+export interface AnnotationAuditChange {
+  objectId: string;
+  changeType: AnnotationAuditChangeType;
+  changedFields: string[];
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+}
+
+export interface AnnotationAuditCounts {
+  added: number;
+  modified: number;
+  deleted: number;
+}
+
+export interface AnnotationStatistics {
+  datasetId?: string;
+  annotatorCreatedObjects: number;
+  finalEffectiveObjects: number;
+  completedFrames: number;
+  completedJobs: number;
+  reviewerAddedObjects: number;
+  reviewerModifiedObjects: number;
+  reviewerDeletedObjects: number;
+  approvedJobs: number;
+  rejectedJobs: number;
 }
 
 export interface ImageCaption {
@@ -216,7 +388,6 @@ export interface TrainingDraft {
   version: string;
   datasetId: string;
   model: string;
-  architectureVariant?: ArchitectureVariant;
   weightSource: 'pretrained' | 'scratch';
   epochs: number;
   batchSize: number;
@@ -225,6 +396,19 @@ export interface TrainingDraft {
   gpu: string;
   mixedPrecision: boolean;
   earlyStopping: boolean;
+  jobIds?: string[];
+}
+
+export interface TrainingSnapshot {
+  id: string;
+  datasetId: string;
+  jobIds: string[];
+  createdAt: string;
+  classes: string[];
+  processingRunIds: string[];
+  processingConfig: Record<string, unknown>;
+  images: Array<DatasetImage & { objectKey: string }>;
+  documents: AnnotationDocument[];
 }
 
 export interface TrainingJob {
@@ -245,6 +429,7 @@ export interface TrainingJob {
   errorMessage?: string;
   config?: TrainingDraft;
   artifactId?: string;
+  snapshotId?: string;
 }
 
 export interface TrainingEvent {
@@ -297,10 +482,7 @@ export interface ModelVersion {
   formats: ConversionFormat[];
   stage: '生产候选' | '评估中' | '已归档';
   artifactId?: string;
-  architectureVariant?: ArchitectureVariant;
-  targetFamily?: 'rockchip_npu';
-  rkCompatibilityStatus?: RkCompatibilityStatus;
-  outputProtocol?: OutputProtocol;
+  snapshotId?: string;
 }
 
 export interface ConversionTask {
@@ -332,6 +514,7 @@ export interface ExportTask {
   scope?: 'all' | 'train' | 'validation' | 'test';
   versionName?: string;
   includeImages?: boolean;
+  jobIds?: string[];
 }
 
 export interface Artifact {

@@ -5,6 +5,7 @@ import { Modal, PageHeader, Pagination, ProgressBar, SegmentedControl, StatusBad
 import { useApp } from '../context/AppContext';
 import { taskLabels } from '../data/catalog';
 import type { JobStatus, TrainingJob } from '../types';
+import { effectiveUserRoles } from '../../shared/contracts';
 
 type JobFilter = 'all' | JobStatus;
 
@@ -25,7 +26,8 @@ export function TrainingPage() {
   const queuedCount = jobs.filter((item) => item.status === 'queued').length;
   const completedCount = jobs.filter((item) => item.status === 'completed').length;
   const failedCount = jobs.filter((item) => item.status === 'failed').length;
-  const canRetry = session?.user.role === 'admin' || session?.user.role === 'engineer';
+  const userRoles = session ? effectiveUserRoles(session.user) : [];
+  const canRetry = userRoles.includes('admin') || userRoles.includes('reviewer');
   const retry = async (jobId: string) => {
     setRetryingJobId(jobId);
     try {

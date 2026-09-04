@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Reference platform-style workbench component boundaries and composition."}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Draft, server state, and editor state management conventions."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Task, Segment, Job, annotation, and snapshot persistence conventions."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Shared contracts and cross-layer data flow for the workflow rebuild."}

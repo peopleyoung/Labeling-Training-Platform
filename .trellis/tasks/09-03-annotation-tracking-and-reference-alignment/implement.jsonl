@@ -1,0 +1,4 @@
+{"file": "shared/contracts.ts", "reason": "AnnotationRecord 轨迹字段与审核归属契约"}
+{"file": "shared/schemas.ts", "reason": "保存读取时保留 trackId、keyframe、provenance、flagged 和属性"}
+{"file": "src/components/annotation/ReferenceAnnotationWorkbench.tsx", "reason": "工作台绘制、追踪、关键帧、保存和参考平台按钮行为"}
+{"file": "src/components/annotation/annotationTracks.ts", "reason": "跨帧轨迹插值和关键帧导航纯函数"}

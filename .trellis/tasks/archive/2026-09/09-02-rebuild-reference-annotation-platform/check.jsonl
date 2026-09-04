@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend test, accessibility, and quality gate requirements."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend test and quality gate requirements."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify shared state and data flow across frontend, backend, and database."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Check reuse and prevent duplicate workflow logic."}

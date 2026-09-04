@@ -45,9 +45,7 @@ def base_training_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("--image-size", required=True, type=int)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--learning-rate", type=float, default=0.001)
-    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--weight-source", choices=["pretrained", "scratch"], default="pretrained")
-    parser.add_argument("--architecture-variant", choices=["standard", "rk_compatible"], default="standard")
     parser.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
     parser.add_argument("--fp16", action="store_true")
     return parser

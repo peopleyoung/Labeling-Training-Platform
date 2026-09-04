@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim
+FROM node:22-bookworm-slim AS media-runtime
 
 ARG DEBIAN_MIRROR=http://mirrors.aliyun.com/debian
 ARG DEBIAN_SECURITY_MIRROR=http://mirrors.aliyun.com/debian-security
@@ -7,8 +7,10 @@ ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 ENV DEBIAN_FRONTEND=noninteractive
 RUN sed -i "s|http://deb.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g; s|http://deb.debian.org/debian|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
   && apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates git libgl1 libglib2.0-0 python3 python3-pip \
+  && apt-get install -y --no-install-recommends ca-certificates ffmpeg git libgl1 libglib2.0-0 python3 python3-pip unzip \
   && rm -rf /var/lib/apt/lists/*
+
+FROM media-runtime AS cpu-worker
 
 WORKDIR /app
 COPY package.json package-lock.json ./

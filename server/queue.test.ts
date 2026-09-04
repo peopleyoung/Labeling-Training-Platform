@@ -4,6 +4,7 @@ import { MemoryTaskQueue, queueJobId, queueNameFor } from './queue';
 describe('task queue identifiers', () => {
   it('routes CPU exports separately from GPU tasks', () => {
     expect(queueNameFor('export')).toBe('forge-export');
+    expect(queueNameFor('processing', 'cpu')).toBe('forge-cpu');
     expect(queueNameFor('training', 'cpu')).toBe('forge-cpu');
     expect(queueNameFor('conversion', 'cpu')).toBe('forge-cpu');
     expect(queueNameFor('training')).toBe('forge-gpu');
@@ -13,6 +14,7 @@ describe('task queue identifiers', () => {
   it('creates BullMQ-compatible custom job ids without colons', () => {
     expect(queueJobId('export', 'export-123')).toBe('export-export-123');
     expect(queueJobId('export', 'export-123')).not.toContain(':');
+    expect(queueJobId('processing', 'processing-123')).toBe('processing-processing-123');
   });
 
   it('removes a queued task from the matching execution target', async () => {

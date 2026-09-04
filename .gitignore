@@ -6,6 +6,8 @@ test-results/
 playwright-report/
 .env
 backups/
+data/
+.scratch/
 *.tsbuildinfo
 .DS_Store
 

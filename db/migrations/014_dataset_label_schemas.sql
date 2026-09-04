@@ -1,0 +1,1 @@
+ALTER TABLE datasets ADD COLUMN IF NOT EXISTS label_schema JSONB NOT NULL DEFAULT '[]'::jsonb;

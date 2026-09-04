@@ -6,6 +6,7 @@ import { MetricChart, type MetricSeries } from '../components/MetricChart';
 import { useApp } from '../context/AppContext';
 import { dataFormatDescriptions, taskLabels } from '../data/catalog';
 import type { TrainingEvent, TrainingMetricPoint, TrainingObservability, TrainingType } from '../types';
+import { effectiveUserRoles } from '../../shared/contracts';
 
 type DetailTab = 'overview' | 'logs' | 'config';
 
@@ -23,13 +24,12 @@ function failureSummary(message: string) {
 }
 
 export function buildTrainingMetricSeries(type: TrainingType, points: TrainingMetricPoint[]): MetricSeries[] {
-  const yoloPose = type === 'keypoint' && points.some((point) => typeof point.metrics.mAP50 === 'number');
-  const definitions = type === 'detection' || type === 'instance_segmentation'
+  const definitions = type === 'detection'
     ? [{ key: 'mAP50', label: 'mAP@50', color: '#1778d4', axis: 'left' as const, format: 'score' as const }, { key: 'precision', label: 'Precision', color: '#0f9f7f', axis: 'left' as const, format: 'score' as const }, { key: 'recall', label: 'Recall', color: '#e18c28', axis: 'left' as const, format: 'score' as const }, { key: 'trainBoxLoss', label: 'Box Loss', color: '#d85462', axis: 'right' as const, format: 'number' as const }]
     : type === 'segmentation'
       ? [{ key: 'mIoU', label: 'mIoU', color: '#1778d4', axis: 'left' as const, format: 'score' as const }, { key: 'loss', label: 'Loss', color: '#e18c28', axis: 'right' as const, format: 'number' as const }]
       : type === 'keypoint'
-        ? yoloPose ? [{ key: 'mAP50', label: 'mAP@50', color: '#7257c8', axis: 'left' as const, format: 'score' as const }, { key: 'loss', label: 'Loss', color: '#e18c28', axis: 'right' as const, format: 'number' as const }] : [{ key: 'oks', label: 'OKS', color: '#7257c8', axis: 'left' as const, format: 'score' as const }, { key: 'loss', label: 'Loss', color: '#e18c28', axis: 'right' as const, format: 'number' as const }]
+        ? [{ key: 'oks', label: 'OKS', color: '#7257c8', axis: 'left' as const, format: 'score' as const }, { key: 'loss', label: 'Loss', color: '#e18c28', axis: 'right' as const, format: 'number' as const }]
         : [{ key: 'loss', label: 'Loss', color: '#1778d4', axis: 'right' as const, format: 'number' as const }];
   return definitions.flatMap((definition) => {
     const values = points.map((point) => point.metrics[definition.key]);
@@ -79,7 +79,8 @@ export function TrainingDetailPage() {
 
   const isRunning = job.status === 'running';
   const isQueued = job.status === 'queued';
-  const canManage = session?.user.role === 'admin' || session?.user.role === 'engineer';
+  const userRoles = session ? effectiveUserRoles(session.user) : [];
+  const canManage = userRoles.includes('admin') || userRoles.includes('reviewer');
   const canRetry = job.status === 'failed' && canManage;
   const canDelete = !isRunning && !isQueued && canManage;
   const latestResource = observability.resources.at(-1);

@@ -15,8 +15,8 @@ export async function seedDatabase(databaseUrl: string, bootstrapAdmin: Bootstra
     await pool.query('INSERT INTO workspaces(id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [workspaceId, '工业质检工作空间']);
     const passwordHash = await bcrypt.hash(bootstrapAdmin.password, 12);
     await pool.query(
-      'INSERT INTO users(id, workspace_id, username, display_name, password_hash, role, must_change_password) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username, display_name = EXCLUDED.display_name, role = EXCLUDED.role',
-      ['user-admin', workspaceId, bootstrapAdmin.username, bootstrapAdmin.displayName, passwordHash, 'admin', true],
+      'INSERT INTO users(id, workspace_id, username, display_name, password_hash, role, roles, enabled, must_change_password) VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,$8) ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username, display_name = EXCLUDED.display_name, role = EXCLUDED.role, roles = EXCLUDED.roles, enabled = TRUE',
+      ['user-admin', workspaceId, bootstrapAdmin.username, bootstrapAdmin.displayName, passwordHash, 'admin', JSON.stringify(['admin']), true],
     );
   } finally {
     await pool.end();

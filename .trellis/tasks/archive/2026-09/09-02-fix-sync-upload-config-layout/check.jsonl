@@ -1,0 +1,4 @@
+{"file": "CONTEXT.md", "reason": "Verify the fix preserves the project domain model and existing workflow boundaries."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Verify backend changes follow the repository and API layer conventions."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Verify frontend changes follow the component, state, and type conventions."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify request/response and persistence data flow across layers."}

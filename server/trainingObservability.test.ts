@@ -14,6 +14,14 @@ describe('training observability parsing', () => {
     ]);
   });
 
+  it('maps segmentation and pose metrics from Ultralytics CSV output', () => {
+    const points = parseYoloResultsCsv([
+      'epoch,train/seg_loss,train/pose_loss,metrics/mAP50(M),metrics/mAP50(P),metrics/mAP50-95(M),metrics/mAP50-95(P)',
+      '1,1.2,0.8,0.31,0.42,0.2,0.3',
+    ].join('\n'));
+    expect(points).toEqual([{ epoch: 1, metrics: { trainSegLoss: 1.2, trainPoseLoss: 0.8, mAP50: 0.42, mAP50_95: 0.3 } }]);
+  });
+
   it('decodes structured progress and ignores framework output', () => {
     const event = parseRunnerEvent('{"event":"progress","epoch":2,"loss":0.42,"mIoU":0.6}');
     expect(event).toMatchObject({ event: 'progress', epoch: 2 });
