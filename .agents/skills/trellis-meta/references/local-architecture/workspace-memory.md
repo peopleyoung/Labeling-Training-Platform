@@ -25,7 +25,7 @@
 Run this the first time:
 
 ```bash
-/home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12 ./.trellis/scripts/init_developer.py <name>
+/home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12.12 ./.trellis/scripts/init_developer.py <name>
 ```
 
 This creates `.trellis/.developer` and the corresponding workspace directory. The AI should not change developer identity casually; if the identity is wrong, first confirm who is using the current project.
@@ -37,7 +37,7 @@ This creates `.trellis/.developer` and the corresponding workspace directory. Th
 Common command for recording a session:
 
 ```bash
-/home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12 ./.trellis/scripts/add_session.py \
+/home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12.12 ./.trellis/scripts/add_session.py \
   --title "Session title" \
   --summary "What changed" \
   --commit "abc1234"

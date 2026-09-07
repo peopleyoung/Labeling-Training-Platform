@@ -1,35 +1,51 @@
 # Type Safety
 
+> Type safety patterns in this project.
+
+---
+
+## Overview
+
+<!--
+Document your project's type safety conventions here.
+
+Questions to answer:
+- What type system do you use?
+- How are types organized?
+- What validation library do you use?
+- How do you handle type inference?
+-->
+
+(To be filled by the team)
+
+---
+
 ## Type Organization
 
-Shared domain entities live in `src/types.ts`. Fixture modules and context commands import these types rather than declaring structural copies.
+<!-- Where types are defined, shared types vs local types -->
 
-```ts
-export type ConversionFormat = 'ONNX' | 'TensorRT' | 'TorchScript' | 'OpenVINO';
+(To be filled by the team)
 
-export interface TrainingDraft {
-  type: TrainingType;
-  datasetId: string;
-  model: string;
-  epochs: number;
-  gpu: string;
-}
-```
+---
 
-Use `as const` lookup maps when UI labels/configuration are keyed by a union.
+## Validation
 
-```ts
-export const formatDescriptions = {
-  ONNX: { target: '通用 CPU / GPU' },
-  TensorRT: { target: 'NVIDIA Orin / Ampere+' },
-  TorchScript: { target: 'PyTorch Runtime' },
-  OpenVINO: { target: 'Intel Core / Xeon' },
-} as const;
-```
+<!-- Runtime validation patterns (Zod, Yup, io-ts, etc.) -->
 
-## Validation And Prohibitions
+(To be filled by the team)
 
-Fixtures are trusted typed local data. Add runtime schema validation at a future API boundary rather than scattering casts through pages.
+---
 
-- Do not use `any`, `@ts-ignore`, or non-null assertions when a route parameter or finder can be narrowed safely.
-- Do not store annotation coordinates as raw pixels; use normalized values from `utils/annotation.ts`.
+## Common Patterns
+
+<!-- Type utilities, generics, type guards -->
+
+(To be filled by the team)
+
+---
+
+## Forbidden Patterns
+
+<!-- any, type assertions, etc. -->
+
+(To be filled by the team)

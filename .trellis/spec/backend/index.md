@@ -15,9 +15,8 @@ This directory contains guidelines for backend development. Fill in each file wi
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Database Guidelines](./database-guidelines.md) | PostgreSQL workspace scope, migrations, task and artifact persistence | Established |
-| [Deployment Guidelines](./deployment-guidelines.md) | Compose public address, secrets, GPU and artifact-volume contract | Established |
-| [Error Handling](./error-handling.md) | Machine-readable API error envelope and worker failure handling | Established |
+| [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
+| [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 

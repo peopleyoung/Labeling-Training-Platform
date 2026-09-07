@@ -69,7 +69,7 @@ services:
     ports:
       - "${API_BIND:-0.0.0.0}:${API_PUBLIC_PORT:-4000}:4000"
     volumes:
-      - forge-worker-data:/data
+      - ./data:/data
 
   export-worker:
     build:
@@ -87,7 +87,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - forge-worker-data:/data
+      - ./data:/data
 
   cpu-worker:
     build:
@@ -109,7 +109,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - forge-worker-data:/data
+      - ./data:/data
 
   worker:
     profiles: [gpu]
@@ -140,7 +140,7 @@ services:
               count: 2
               capabilities: [gpu]
     volumes:
-      - forge-worker-data:/data
+      - ./data:/data
 
   web:
     build:
@@ -163,4 +163,3 @@ volumes:
   forge-postgres:
   forge-redis:
   forge-minio:
-  forge-worker-data:

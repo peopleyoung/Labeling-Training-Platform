@@ -32,7 +32,7 @@ Questions to answer:
 
 <!-- Patterns that must always be used -->
 
-(To be filled by the team)
+- Training Workers must resolve official pretrained weights through the shared `FORGE_MODEL_CACHE`. A missing Ultralytics weight may be downloaded on demand only when `FORGE_PRETRAINED_OFFLINE` is not enabled; cache misses in offline mode and failed downloads must produce an explicit task failure. Never silently switch a requested pretrained job to scratch initialization.
 
 ---
 
@@ -40,7 +40,7 @@ Questions to answer:
 
 <!-- What level of testing is expected -->
 
-(To be filled by the team)
+- Training changes must cover the model-family/data-format contract, cache-hit behavior, offline cache misses, and at least one real or isolated Worker training path for each affected model family.
 
 ---
 

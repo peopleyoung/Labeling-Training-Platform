@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Check, ChevronDown, KeyRound, Trash2, UserPlus, Users, X } from 'lucide-react';
+import { BarChart3 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { PageHeader } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { userRoles, type UserRole } from '../../shared/contracts';
@@ -32,7 +34,7 @@ export function AdminPage() {
     finally { setSavingUser(false); }
   };
   return <div className="page admin-page">
-    <PageHeader title="系统管理" description="统一管理用户账号与角色权限" />
+    <PageHeader title="系统管理" description="统一管理用户账号与角色权限" actions={<Link className="button secondary compact" to="/admin/annotation-statistics"><BarChart3 size={14} />标注审核统计</Link>} />
     <section className="admin-overview">
       <div className="admin-overview-copy"><span className="eyebrow">USER MANAGEMENT</span><h2>让每个账号都有清晰的责任边界</h2><p>通过固定角色管理系统成员权限，数据集任务分配在数据中心完成。</p></div>
       <div className="admin-role-summary">{userSummary.map(({ role, count }) => <div key={role}><span className={roleClass(role)}>{roleLabels[role]}</span><strong>{count}</strong><small>个启用账号</small></div>)}</div>

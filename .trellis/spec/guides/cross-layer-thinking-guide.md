@@ -71,15 +71,6 @@ For each boundary:
 
 **Good**: Each layer only knows its neighbors
 
-### Mistake 3A: Comparing With The Next Revision
-
-Optimistic locking carries two revision values across UI, API, and storage:
-
-- the client's current revision, used in the conflict predicate;
-- the next revision, written only after that predicate succeeds.
-
-Do not reuse one SQL placeholder for both roles. A regression must prove two consecutive writes succeed before proving a stale write conflicts; testing only the first insert cannot detect a predicate that compares the stored row with the proposed next revision.
-
 ### Mistake 4: Every Consumer Parses The Same Payload
 
 **Bad**: A command reads JSONL events and casts fields inline:

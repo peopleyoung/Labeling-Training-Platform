@@ -1254,6 +1254,16 @@ kbd { padding: 2px 6px; border: 1px solid #d2dbe3; border-radius: 4px; color: #7
 .processing-progress-ring span { position: relative; z-index: 1; color: #fff; font-size: 6px; font-weight: 700; }
 .admin-layout { grid-template-columns: minmax(0, 1fr); }
 .admin-users-card { grid-column: 1; }
+.performance-overview { margin-bottom: 18px; }
+.performance-filter-card { margin-bottom: 18px; }
+.performance-filters { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px; }
+.performance-filters .form-field { min-width: 170px; margin: 0; }
+.performance-filter-submit { min-height: 36px; }
+.performance-summary-label { color: #c5d8e4; font-size: 9px; }
+.performance-card { min-width: 0; }
+.performance-table { min-width: 760px; }
+.performance-table td:first-child strong { color: #273844; }
+.performance-warning { color: var(--red); }
 
 /* Keep the annotation workbench readable and contained at each layout tier. */
 .reference-frame-tools .reference-workspace-selector { flex-basis: 140px; width: 140px !important; }

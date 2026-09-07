@@ -320,6 +320,22 @@ export interface AnnotationStatistics {
   rejectedJobs: number;
 }
 
+export interface AnnotatorPerformance {
+  annotatorId: string;
+  annotatorName: string;
+  enabled: boolean;
+  validAnnotationCount: number;
+  approvedJobs: number;
+  rejectedJobs: number;
+  reviewedJobs: number;
+  rejectionRate: number;
+}
+
+export interface AnnotatorPerformanceFilter {
+  startDate?: string;
+  endDate?: string;
+}
+
 export interface ImageCaption {
   id: string;
   text: string;

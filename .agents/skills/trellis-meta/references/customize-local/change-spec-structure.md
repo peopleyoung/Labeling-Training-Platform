@@ -50,8 +50,8 @@ Monorepo example:
 Adding a spec does not mean every task automatically reads it. The current task must reference it in JSONL:
 
 ```bash
-/home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12 ./.trellis/scripts/task.py add-context <task> implement ".trellis/spec/webapp/security/index.md" "Security conventions"
-/home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12 ./.trellis/scripts/task.py add-context <task> check ".trellis/spec/webapp/security/index.md" "Security review rules"
+/home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12.12 ./.trellis/scripts/task.py add-context <task> implement ".trellis/spec/webapp/security/index.md" "Security conventions"
+/home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12.12 ./.trellis/scripts/task.py add-context <task> check ".trellis/spec/webapp/security/index.md" "Security review rules"
 ```
 
 ## Change Monorepo Packages
@@ -70,7 +70,7 @@ default_package: webapp
 After editing, run:
 
 ```bash
-/home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12 ./.trellis/scripts/get_context.py --mode packages
+/home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12.12 ./.trellis/scripts/get_context.py --mode packages
 ```
 
 Use this output to confirm AI can see the correct packages and spec layers.

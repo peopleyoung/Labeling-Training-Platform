@@ -67,8 +67,8 @@ After writing it, update the corresponding `index.md` so AI can find the new rul
 After writing a spec, add it to the current task context:
 
 ```bash
-/home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12 ./.trellis/scripts/task.py add-context <task> implement ".trellis/spec/backend/error-handling.md" "Error handling conventions"
-/home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12 ./.trellis/scripts/task.py add-context <task> check ".trellis/spec/backend/error-handling.md" "Review error handling"
+/home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12.12 ./.trellis/scripts/task.py add-context <task> implement ".trellis/spec/backend/error-handling.md" "Error handling conventions"
+/home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12.12 ./.trellis/scripts/task.py add-context <task> check ".trellis/spec/backend/error-handling.md" "Review error handling"
 ```
 
 ## Do Not Store Project-Private Rules In `trellis-meta`

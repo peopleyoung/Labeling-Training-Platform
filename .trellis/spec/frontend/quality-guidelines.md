@@ -1,25 +1,51 @@
 # Quality Guidelines
 
-## Required Commands
+> Code quality standards for frontend development.
 
-```bash
-npm run typecheck
-npm run test
-npm run build
-npm run test:e2e
-```
+---
 
-Vitest only collects `src/**/*.test.{ts,tsx}`. Playwright owns `e2e/**/*.spec.ts` via `playwright.config.ts`; do not allow Vitest to import Playwright declarations.
+## Overview
 
-## Testing Requirements
+<!--
+Document your project's quality standards here.
 
-- Pure calculations need adjacent unit tests. `utils/annotation.test.ts` covers normalization and reverse dragging.
-- Route behavior needs React Testing Library coverage for navigation and form state.
-- End-to-end coverage must exercise export, annotation, training configuration, conversion, and narrow-screen navigation.
-- Visual changes require screenshot review at desktop and mobile widths; check canvas pixels are nonblank and controls do not overlap.
+Questions to answer:
+- What patterns are forbidden?
+- What linting rules do you enforce?
+- What are your testing requirements?
+- What code review standards apply?
+-->
+
+(To be filled by the team)
+
+---
 
 ## Forbidden Patterns
 
-- Do not leave `console.log`, `@ts-ignore`, or broad `any` casts in application code.
-- Do not call Playwright's `test()` from a file Vitest collects.
-- Do not duplicate status labels or format descriptions in route files; import canonical maps from `data/mockData.ts` or `utils/format.ts`.
+<!-- Patterns that should never be used and why -->
+
+(To be filled by the team)
+
+---
+
+## Required Patterns
+
+<!-- Patterns that must always be used -->
+
+(To be filled by the team)
+
+---
+
+## Testing Requirements
+
+<!-- What level of testing is expected -->
+
+(To be filled by the team)
+
+---
+
+## Code Review Checklist
+
+<!-- What reviewers should check -->
+
+(To be filled by the team)

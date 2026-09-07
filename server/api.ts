@@ -273,6 +273,14 @@ export async function buildApi({ config, repository, queue }: ApiDependencies): 
     const user = (request as AuthenticatedRequest).currentUser;
     return repository.getAnnotationStatistics(datasetId, { id: user.id, role: user.role });
   });
+  app.get('/api/v1/annotation-statistics/annotators', { preHandler: requireRoles('admin') }, async (request) => {
+    const query = request.query as { startDate?: string; endDate?: string };
+    const startDate = query.startDate?.trim() || undefined;
+    const endDate = query.endDate?.trim() || undefined;
+    if ((startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) || (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate))) throw new HttpError(400, 'INVALID_DATE_RANGE', '日期格式必须为 YYYY-MM-DD');
+    if (startDate && endDate && startDate > endDate) throw new HttpError(400, 'INVALID_DATE_RANGE', '开始日期不能晚于结束日期');
+    return { items: await repository.getAnnotatorPerformance({ startDate, endDate }) };
+  });
 
   app.get('/api/v1/datasets', { preHandler: requireRoles('admin', 'reviewer', 'annotator') }, async (request) => {
     const user = (request as AuthenticatedRequest).currentUser;

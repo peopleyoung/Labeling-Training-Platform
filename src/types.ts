@@ -4,6 +4,8 @@ export type {
   AnnotationAuditChange,
   AnnotationAuditCounts,
   AnnotationStatistics,
+  AnnotatorPerformance,
+  AnnotatorPerformanceFilter,
   AnnotationTask,
   AnnotationSegment,
   AnnotationJob,

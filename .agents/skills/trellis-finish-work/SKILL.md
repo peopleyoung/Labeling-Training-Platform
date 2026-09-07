@@ -10,7 +10,7 @@ Wrap up the current session: archive the active task (and any other completed-bu
 ## Step 1: Survey current state
 
 ```bash
-/home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12.12 ./.trellis/scripts/get_context.py --mode record
+/home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12.12.12 ./.trellis/scripts/get_context.py --mode record
 ```
 
 This prints:
@@ -50,7 +50,7 @@ Then route:
 ## Step 3: Archive task(s)
 
 ```bash
-/home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12.12 ./.trellis/scripts/task.py archive <task-name>
+/home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12.12.12 ./.trellis/scripts/task.py archive <task-name>
 ```
 
 At minimum: the current active task (if any). Plus any extra tasks the user confirmed in Step 1. Each archive produces a `chore(task): archive ...` commit via the script's auto-commit.
@@ -60,7 +60,7 @@ If there is no active task and the user did not confirm any cleanup archives, sk
 ## Step 4: Record session journal
 
 ```bash
-/home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12.12 ./.trellis/scripts/add_session.py \
+/home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin//home/hdzk/.local/bin/python3.12.12.12.12 ./.trellis/scripts/add_session.py \
   --title "Session Title" \
   --commit "hash1,hash2" \
   --summary "Brief summary"

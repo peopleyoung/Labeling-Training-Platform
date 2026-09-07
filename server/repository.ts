@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { Pool, type PoolClient } from 'pg';
-import type { AnnotationJob, AnnotationJobStatus, AnnotationReviewDecisionInput, AnnotationReviewItem, AnnotationReviewSummary, AnnotationSegment, AnnotationStatistics, AnnotationTask, AnnotationTaskStatus, Artifact, AuthUser, AnnotationDocument, AnnotationRecord, ConversionTask, Dataset, DatasetDeletionPreview, DatasetImage, DatasetLabel, DatasetProcessingConfig, ExportTask, ModelVersion, ProcessingRun, SourceAsset, SystemSettings, TrainingDraft, TrainingEvent, TrainingJob, TrainingObservability, TrainingMetricPoint, TrainingResourceSample, TrainingSnapshot, UploadSession, UploadStatus, UserRole, WorkspaceActivity } from '../shared/contracts';
+import type { AnnotationJob, AnnotationJobStatus, AnnotationReviewDecisionInput, AnnotationReviewItem, AnnotationReviewSummary, AnnotationSegment, AnnotationStatistics, AnnotatorPerformance, AnnotatorPerformanceFilter, AnnotationTask, AnnotationTaskStatus, Artifact, AuthUser, AnnotationDocument, AnnotationRecord, ConversionTask, Dataset, DatasetDeletionPreview, DatasetImage, DatasetLabel, DatasetProcessingConfig, ExportTask, ModelVersion, ProcessingRun, SourceAsset, SystemSettings, TrainingDraft, TrainingEvent, TrainingJob, TrainingObservability, TrainingMetricPoint, TrainingResourceSample, TrainingSnapshot, UploadSession, UploadStatus, UserRole, WorkspaceActivity } from '../shared/contracts';
 import { roleAliases } from '../shared/contracts';
 import { attributeAnnotations } from './annotationAttribution';
 import { RepositoryConflictError, RepositoryStateError } from './errors';
@@ -130,12 +130,23 @@ export interface Repository {
   getExport(id: string): Promise<ExportTask | null>;
   getArtifact(id: string): Promise<Artifact | null>;
   getAnnotationStatistics(datasetId: string | undefined, actor: Pick<AuthUser, 'id' | 'role'>): Promise<AnnotationStatistics>;
+  getAnnotatorPerformance(filter?: AnnotatorPerformanceFilter): Promise<AnnotatorPerformance[]>;
   listRecentActivities(limit: number): Promise<WorkspaceActivity[]>;
   writeAudit(input: { actorId: string; action: string; entityType: string; entityId?: string; metadata?: Record<string, unknown> }): Promise<void>;
 }
 
 function displayDate(value: string | Date): string {
   return value instanceof Date ? value.toISOString() : value;
+}
+
+function withinDateRange(value: string | Date | undefined, filter?: AnnotatorPerformanceFilter) {
+  if (!filter?.startDate && !filter?.endDate) return true;
+  if (!value) return false;
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return false;
+  if (filter.startDate && timestamp < new Date(`${filter.startDate}T00:00:00.000Z`).getTime()) return false;
+  if (filter.endDate && timestamp >= new Date(`${filter.endDate}T00:00:00.000Z`).getTime() + 86_400_000) return false;
+  return true;
 }
 
 function formatBytes(value: number) {
@@ -615,6 +626,17 @@ export class MemoryRepository implements Repository {
       approvedJobs: jobs.filter((job) => job.status === 'approved').length,
       rejectedJobs: jobs.filter((job) => job.status === 'rework').length,
     };
+  }
+  async getAnnotatorPerformance(filter?: AnnotatorPerformanceFilter): Promise<AnnotatorPerformance[]> {
+    return this.users.filter((user) => user.role === 'annotator').map((user) => {
+      const documents = [...this.annotations.values()].filter((document) => document.reviewStatus === 'approved' && withinDateRange(document.reviewedAt, filter));
+      const validAnnotationCount = documents.reduce((total, document) => total + document.annotations.filter((record) => record.createdBy === user.id && (record.createdByRole ?? 'annotator') === 'annotator').length, 0);
+      const jobs = this.annotationJobs.filter((job) => job.assigneeId === user.id && withinDateRange(job.reviewedAt, filter));
+      const approvedJobs = jobs.filter((job) => job.status === 'approved').length;
+      const rejectedJobs = jobs.filter((job) => job.status === 'rework').length;
+      const reviewedJobs = approvedJobs + rejectedJobs;
+      return { annotatorId: user.id, annotatorName: user.displayName, enabled: user.enabled !== false, validAnnotationCount, approvedJobs, rejectedJobs, reviewedJobs, rejectionRate: reviewedJobs ? rejectedJobs / reviewedJobs : 0 };
+    });
   }
   async listRecentActivities(limit: number) { return structuredClone(this.auditLogs.filter((activity) => activity.action !== 'auth.login').slice(0, limit)); }
   async writeAudit(input: { actorId: string; action: string; entityType: string; entityId?: string; metadata?: Record<string, unknown> }) {
@@ -1460,6 +1482,22 @@ export class PgRepository implements Repository {
       approvedJobs: scopedJobs.filter((job) => job.status === 'approved').length,
       rejectedJobs: scopedJobs.filter((job) => job.status === 'rework').length,
     };
+  }
+  async getAnnotatorPerformance(filter?: AnnotatorPerformanceFilter): Promise<AnnotatorPerformance[]> {
+    const [users, documents, jobs] = await Promise.all([
+      this.pool.query<{ id: string; display_name: string; enabled: boolean }>("SELECT id, display_name, enabled FROM users WHERE workspace_id = $1 AND role = 'annotator' ORDER BY display_name, id", [workspaceId]),
+      this.pool.query<{ review_status: string; annotations: unknown; reviewed_at: string | Date | null }>('SELECT d.review_status, d.annotations, d.reviewed_at FROM annotation_documents d JOIN datasets ds ON ds.id = d.dataset_id WHERE ds.workspace_id = $1', [workspaceId]),
+      this.pool.query<{ assignee_id: string | null; status: string; reviewed_at: string | Date | null }>('SELECT j.assignee_id, j.status, j.reviewed_at FROM annotation_jobs j JOIN datasets ds ON ds.id = j.dataset_id WHERE ds.workspace_id = $1', [workspaceId]),
+    ]);
+    const approvedDocuments = documents.rows.filter((document) => document.review_status === 'approved' && withinDateRange(document.reviewed_at ?? undefined, filter)).map((document) => Array.isArray(document.annotations) ? document.annotations as AnnotationRecord[] : []);
+    return users.rows.map((user) => {
+      const validAnnotationCount = approvedDocuments.reduce((total, annotations) => total + annotations.filter((record) => record.createdBy === user.id && (record.createdByRole ?? 'annotator') === 'annotator').length, 0);
+      const assignedJobs = jobs.rows.filter((job) => job.assignee_id === user.id && withinDateRange(job.reviewed_at ?? undefined, filter));
+      const approvedJobs = assignedJobs.filter((job) => job.status === 'approved').length;
+      const rejectedJobs = assignedJobs.filter((job) => job.status === 'rework').length;
+      const reviewedJobs = approvedJobs + rejectedJobs;
+      return { annotatorId: user.id, annotatorName: user.display_name, enabled: user.enabled, validAnnotationCount, approvedJobs, rejectedJobs, reviewedJobs, rejectionRate: reviewedJobs ? rejectedJobs / reviewedJobs : 0 };
+    });
   }
   async listRecentActivities(limit: number) {
     const result = await this.pool.query(`

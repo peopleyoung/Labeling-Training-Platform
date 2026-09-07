@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Bell,
+  BarChart3,
   Boxes,
   Braces,
   ClipboardList,
@@ -104,6 +105,7 @@ export function AppShell() {
         <nav className="utility-nav" aria-label="辅助导航">
           <button onClick={() => setUtilityModal('help')}><CircleHelp size={18} />帮助与文档</button>
           {userRoles.includes('admin') && <NavLink className="utility-link" to="/admin"><Settings size={18} /><span>系统管理</span></NavLink>}
+          {userRoles.includes('admin') && <NavLink className="utility-link" to="/admin/annotation-statistics"><BarChart3 size={18} /><span>标注审核统计</span></NavLink>}
         </nav>
         <div className="sidebar-user">
           <details className="sidebar-user-menu">

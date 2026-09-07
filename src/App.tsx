@@ -16,6 +16,7 @@ import { TrainingWizardPage } from './pages/TrainingWizardPage';
 import { AdminPage } from './pages/AdminPage';
 import { AnnotationTaskDetailPage, AnnotationTasksPage } from './pages/AnnotationTasksPage';
 import { DataCenterPlaceholderPage } from './pages/DataCenterPlaceholderPage';
+import { AnnotatorPerformancePage } from './pages/AnnotatorPerformancePage';
 
 function ProtectedShell() {
   const { apiEnabled, session } = useApp();
@@ -65,6 +66,7 @@ export function App() {
           <Route path="models" element={<RoleRoute allowed={['admin', 'reviewer']}><ModelsPage /></RoleRoute>} />
           <Route path="conversions" element={<RoleRoute allowed={['admin', 'reviewer']}><ConversionsPage /></RoleRoute>} />
           <Route path="admin" element={<RoleRoute allowed={['admin']}><AdminPage /></RoleRoute>} />
+          <Route path="admin/annotation-statistics" element={<RoleRoute allowed={['admin']}><AnnotatorPerformancePage /></RoleRoute>} />
         </Route>
         <Route path="annotate/:datasetId" element={<ProtectedAnnotation />} />
         <Route path="annotate/:datasetId/job/:jobId" element={<ProtectedAnnotation />} />
