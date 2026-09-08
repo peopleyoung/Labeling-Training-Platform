@@ -15,7 +15,8 @@ import { TrainingPage } from './pages/TrainingPage';
 import { TrainingWizardPage } from './pages/TrainingWizardPage';
 import { AdminPage } from './pages/AdminPage';
 import { AnnotationTaskDetailPage, AnnotationTasksPage } from './pages/AnnotationTasksPage';
-import { DataCenterPlaceholderPage } from './pages/DataCenterPlaceholderPage';
+import { DataCenterPage } from './pages/DataCenterPage';
+import { TaskCatalogPage } from './pages/TaskCatalogPage';
 import { AnnotatorPerformancePage } from './pages/AnnotatorPerformancePage';
 
 function ProtectedShell() {
@@ -41,7 +42,7 @@ function RoleRoute({ allowed, children }: { allowed: UserRole[]; children: React
 function DataCenterRoute() {
   const { session } = useApp();
   const isAdmin = session ? effectiveUserRoles(session.user).includes('admin') : false;
-  return isAdmin ? <DataCenterPlaceholderPage /> : <DatasetsPage />;
+  return isAdmin ? <DataCenterPage /> : <DatasetsPage />;
 }
 
 function AnnotationTaskRoute() {
@@ -66,6 +67,7 @@ export function App() {
           <Route path="models" element={<RoleRoute allowed={['admin', 'reviewer']}><ModelsPage /></RoleRoute>} />
           <Route path="conversions" element={<RoleRoute allowed={['admin', 'reviewer']}><ConversionsPage /></RoleRoute>} />
           <Route path="admin" element={<RoleRoute allowed={['admin']}><AdminPage /></RoleRoute>} />
+          <Route path="admin/task-catalog" element={<RoleRoute allowed={['admin']}><TaskCatalogPage /></RoleRoute>} />
           <Route path="admin/annotation-statistics" element={<RoleRoute allowed={['admin']}><AnnotatorPerformancePage /></RoleRoute>} />
         </Route>
         <Route path="annotate/:datasetId" element={<ProtectedAnnotation />} />

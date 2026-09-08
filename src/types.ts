@@ -29,7 +29,6 @@ export type {
   DatasetProcessingConfig,
   DatasetDeletionPreview,
   DatasetImage,
-  DatasetType,
   ExportTask,
   JobStatus,
   LoginResponse,

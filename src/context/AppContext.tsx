@@ -37,7 +37,7 @@ interface AppContextValue {
   uploadModel: (input: { name: string; version: string; task: ModelVersion['task']; framework: string; stage: ModelVersion['stage']; file: File }) => Promise<ModelVersion>;
   updateModelStage: (modelId: string, stage: ModelVersion['stage']) => Promise<void>;
   deleteModel: (modelId: string) => Promise<void>;
-  createDataset: (input: { name: string; description: string; version: string; classes: string[]; labels?: DatasetLabel[]; annotatorIds?: string[]; reviewerIds?: string[]; processingConfig: DatasetProcessingConfig }) => Promise<Dataset>;
+  createDataset: (input: { taskTypeId: string; name: string; description: string; version: string; classes: string[]; labels?: DatasetLabel[]; annotatorIds?: string[]; reviewerIds?: string[]; processingConfig: DatasetProcessingConfig }) => Promise<Dataset>;
   uploadDatasetImages: (datasetId: string, files: File[], split?: DatasetImage['split']) => Promise<DatasetImage[]>;
   uploadDatasetAssets: (datasetId: string, files: File[], onProgress?: (completed: number, total: number) => void) => Promise<SourceAsset[]>;
   datasetAssets: (datasetId: string) => Promise<SourceAsset[]>;
@@ -285,7 +285,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const trainingEvents = useCallback(async (jobId: string) => apiEnabled ? (await client.trainingEvents(jobId)).items : [], [client]);
   const trainingObservability = useCallback(async (jobId: string) => apiEnabled ? client.trainingObservability(jobId) : { metrics: [], resources: [] }, [client]);
 
-  const createDataset = useCallback(async (input: { name: string; description: string; version: string; classes: string[]; annotatorIds?: string[]; reviewerIds?: string[]; processingConfig: DatasetProcessingConfig }) => {
+  const createDataset = useCallback(async (input: { taskTypeId: string; name: string; description: string; version: string; classes: string[]; annotatorIds?: string[]; reviewerIds?: string[]; processingConfig: DatasetProcessingConfig }) => {
     if (!apiEnabled) throw new ApiClientError('API_DISABLED', '当前环境未连接平台服务');
     const dataset = await client.createDataset(input);
     setDatasets((current) => [dataset, ...current]);

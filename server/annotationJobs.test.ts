@@ -4,7 +4,7 @@ import { MemoryRepository } from './repository';
 describe('annotation jobs', () => {
   it('limits annotation and review claims to dataset members', async () => {
     const repository = new MemoryRepository({ datasets: [] });
-    const dataset = await repository.createDataset({ name: 'Assigned Jobs', description: '', version: 'v1', classes: [], annotatorIds: ['annotator-1'], reviewerIds: ['reviewer-1'] });
+    const dataset = await repository.createDataset({ taskTypeId: await createTestTaskType(repository), name: 'Assigned Jobs', description: '', version: 'v1', classes: [], annotatorIds: ['annotator-1'], reviewerIds: ['reviewer-1'] });
     const task = await repository.getAnnotationTask(dataset.id);
     await repository.updateAnnotationTaskStatus(dataset.id, 'annotating');
     await repository.createAnnotationSegments([{ id: 'assigned-segment', datasetId: dataset.id, annotationTaskId: task!.id, sourceAssetId: 'asset-1', sequence: 1, startItemId: 'image-1', endItemId: 'image-1', itemCount: 1 }]);
@@ -18,7 +18,7 @@ describe('annotation jobs', () => {
 
   it('prefers rework and then claims the first available job', async () => {
     const repository = new MemoryRepository({ datasets: [] });
-    const dataset = await repository.createDataset({ name: 'Jobs', description: '', version: 'v1', classes: [] });
+    const dataset = await repository.createDataset({ taskTypeId: await createTestTaskType(repository), name: 'Jobs', description: '', version: 'v1', classes: [] });
     const task = await repository.getAnnotationTask(dataset.id);
     await repository.updateAnnotationTaskStatus(dataset.id, 'annotating');
     const segments = await repository.createAnnotationSegments([
@@ -37,7 +37,7 @@ describe('annotation jobs', () => {
 
   it('locks submitted work to one reviewer and returns rejected work to its annotator', async () => {
     const repository = new MemoryRepository({ datasets: [] });
-    const dataset = await repository.createDataset({ name: 'Review Jobs', description: '', version: 'v1', classes: [] });
+    const dataset = await repository.createDataset({ taskTypeId: await createTestTaskType(repository), name: 'Review Jobs', description: '', version: 'v1', classes: [] });
     const task = await repository.getAnnotationTask(dataset.id);
     await repository.createAnnotationSegments([{ id: 'review-segment', datasetId: dataset.id, annotationTaskId: task!.id, sourceAssetId: 'asset-1', sequence: 1, startItemId: 'image-1', endItemId: 'image-1', itemCount: 1 }]);
     const [job] = await repository.listAnnotationJobs(dataset.id);
@@ -58,7 +58,7 @@ describe('annotation jobs', () => {
 
   it('allows administrators to review assigned datasets', async () => {
     const repository = new MemoryRepository({ datasets: [] });
-    const dataset = await repository.createDataset({ name: 'Admin Review Jobs', description: '', version: 'v1', classes: [], reviewerIds: ['reviewer-1'] });
+    const dataset = await repository.createDataset({ taskTypeId: await createTestTaskType(repository), name: 'Admin Review Jobs', description: '', version: 'v1', classes: [], reviewerIds: ['reviewer-1'] });
     const task = await repository.getAnnotationTask(dataset.id);
     await repository.createAnnotationSegments([{ id: 'admin-review-segment', datasetId: dataset.id, annotationTaskId: task!.id, sourceAssetId: 'asset-1', sequence: 1, startItemId: 'image-1', endItemId: 'image-1', itemCount: 1 }]);
     const [job] = await repository.listAnnotationJobs(dataset.id);
@@ -70,7 +70,7 @@ describe('annotation jobs', () => {
 
   it('synchronizes document review state across submit, approve, and reopen', async () => {
     const repository = new MemoryRepository({ datasets: [] });
-    const dataset = await repository.createDataset({ name: 'Lifecycle Jobs', description: '', version: 'v1', classes: [] });
+    const dataset = await repository.createDataset({ taskTypeId: await createTestTaskType(repository), name: 'Lifecycle Jobs', description: '', version: 'v1', classes: [] });
     const image = await repository.createDatasetImage({ datasetId: dataset.id, filename: 'frame.png', mimeType: 'image/png', sizeBytes: 1, objectKey: 'frame.png', split: 'train' });
     const task = await repository.getAnnotationTask(dataset.id);
     await repository.updateAnnotationTaskStatus(dataset.id, 'annotating');
@@ -92,7 +92,7 @@ describe('annotation jobs', () => {
 
   it('synchronizes job status when dataset-level image review is approved', async () => {
     const repository = new MemoryRepository({ datasets: [] });
-    const dataset = await repository.createDataset({ name: 'Dataset Review Sync', description: '', version: 'v1', classes: ['defect'] });
+    const dataset = await repository.createDataset({ taskTypeId: await createTestTaskType(repository), name: 'Dataset Review Sync', description: '', version: 'v1', classes: ['defect'] });
     const image = await repository.createDatasetImage({ datasetId: dataset.id, filename: 'frame.png', mimeType: 'image/png', sizeBytes: 1, objectKey: 'frame.png', split: 'train' });
     const task = await repository.getAnnotationTask(dataset.id);
     await repository.createAnnotationSegments([{ id: 'dataset-review-segment', datasetId: dataset.id, annotationTaskId: task!.id, sourceAssetId: 'asset-1', sequence: 1, startItemId: image.id, endItemId: image.id, itemCount: 1 }]);
@@ -105,3 +105,4 @@ describe('annotation jobs', () => {
     expect((await repository.getAnnotationJob(job.id))?.status).toBe('approved');
   });
 });
+import { createTestTaskType } from './testCatalogFixtures';

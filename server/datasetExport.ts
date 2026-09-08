@@ -69,6 +69,8 @@ export function selectAnnotatedExportData(images: ExportImage[], documents: Expo
 
 function supportsAnnotation(format: DataFormat, annotation: AnnotationRecord) {
   const type = annotation.geometry.type;
+  if (format === 'CVAT_JSON') return ['rectangle', 'polygon', 'polyline', 'ellipse', 'keypoint'].includes(type);
+  if (format === 'CVAT_XML') return ['rectangle', 'polygon', 'polyline', 'ellipse'].includes(type);
   if (format === 'IMAGE_FOLDER') return false;
   if (format === 'YOLO_KEYPOINTS') return type === 'keypoint' || type === 'skeleton';
   if (format === 'YOLO_SEGMENTATION') return ['rectangle', 'polygon', 'ellipse'].includes(type);
@@ -79,6 +81,9 @@ function supportsAnnotation(format: DataFormat, annotation: AnnotationRecord) {
 }
 
 export function selectFormatCompatibleExportData(format: DataFormat, images: ExportImage[], documents: ExportAnnotationDocument[], includeEmptyImages = false) {
+  const imageIds = new Set(images.map((image) => image.id));
+  const unsupported = documents.filter((document) => imageIds.has(document.imageId)).flatMap((document) => document.annotations.filter((annotation) => !supportsAnnotation(format, annotation)).map((annotation) => `${document.imageId}: ${annotation.geometry.type}`));
+  if (unsupported.length) throw new Error(`${format} 无法表达 ${unsupported.length} 个标注对象（${unsupported.slice(0, 5).join('、')}），请选择兼容格式`);
   if (format === 'IMAGE_FOLDER') {
     const compatibleDocuments = documents.filter((document) => document.imageAttributes?.includeInSdxl && document.captions?.some((caption) => caption.primary && caption.text.trim()));
     const ids = new Set(compatibleDocuments.map((document) => document.imageId));

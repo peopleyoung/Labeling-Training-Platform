@@ -18,6 +18,7 @@
     "test:server": "vitest run server",
     "db:migrate": "tsx server/migrate.ts",
     "db:seed": "tsx server/seedDatabase.ts",
+    "datasets:reset-catalog": "tsx server/resetDatasetCatalog.ts",
     "artifacts:cleanup": "tsx server/cleanupArtifacts.ts"
   },
   "dependencies": {

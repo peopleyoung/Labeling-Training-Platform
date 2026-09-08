@@ -19,6 +19,7 @@ import { removeManagedArtifactDirectories, type StorageRemovalSummary } from './
 import { QueueTaskActiveError, type TaskQueue } from './queue';
 import type { Repository, StoredUser } from './repository';
 import { diffAnnotations, summarizeAnnotationChanges } from './annotationAttribution';
+import { catalogInputSchema, catalogUpdateSchema, dataCenterQuerySchema, datasetBindingSchema } from '../shared/taskCatalog';
 
 interface TokenPayload { userId: string; workspaceId: string }
 interface AuthenticatedRequest extends FastifyRequest { currentUser: StoredUser }
@@ -264,6 +265,18 @@ export async function buildApi({ config, repository, queue }: ApiDependencies): 
     const settings = await repository.updateSettings(parseBody(systemSettingsSchema, request.body));
     await repository.writeAudit({ actorId: (request as AuthenticatedRequest).currentUser.id, action: 'settings.update', entityType: 'system_settings', entityId: 'default', metadata: settings as unknown as Record<string, unknown> });
     return settings;
+  });
+  app.get('/api/v1/task-categories', { preHandler: requireRoles('admin') }, async () => repository.catalog.list());
+  app.post('/api/v1/task-categories', { preHandler: requireRoles('admin') }, async (request, reply) => reply.status(201).send(await repository.catalog.save('category', null, parseBody(catalogInputSchema, request.body), (request as AuthenticatedRequest).currentUser.id)));
+  app.patch('/api/v1/task-categories/:id', { preHandler: requireRoles('admin') }, async (request) => repository.catalog.save('category', getId(request, 'id'), parseBody(catalogUpdateSchema, request.body), (request as AuthenticatedRequest).currentUser.id));
+  app.post('/api/v1/task-categories/:id/task-types', { preHandler: requireRoles('admin') }, async (request, reply) => reply.status(201).send(await repository.catalog.save('task', null, parseBody(catalogInputSchema, request.body), (request as AuthenticatedRequest).currentUser.id, getId(request, 'id'))));
+  app.patch('/api/v1/task-types/:id', { preHandler: requireRoles('admin') }, async (request) => repository.catalog.save('task', getId(request, 'id'), parseBody(catalogUpdateSchema, request.body), (request as AuthenticatedRequest).currentUser.id));
+  app.get('/api/v1/data-center/tree', { preHandler: requireRoles('admin') }, async (request) => repository.catalog.tree(parseBody(dataCenterQuerySchema, request.query)));
+  app.patch('/api/v1/datasets/:datasetId/task-type', { preHandler: requireRoles('admin') }, async (request) => {
+    const input = parseBody(datasetBindingSchema, request.body);
+    const datasetId = getId(request, 'datasetId');
+    await repository.catalog.bind(datasetId, input.taskTypeId, input.expectedTaskTypeId, (request as AuthenticatedRequest).currentUser.id);
+    return repository.getDataset(datasetId);
   });
   app.get('/api/v1/catalog/models', { preHandler: requireRoles('admin', 'reviewer') }, async () => ({ items: modelCatalog }));
   app.get('/api/v1/activities', { preHandler: requireRoles('admin', 'reviewer') }, async () => ({ items: await repository.listRecentActivities(5) }));

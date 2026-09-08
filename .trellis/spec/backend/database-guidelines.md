@@ -67,6 +67,47 @@ const openedJob = await repository.claimAnnotationReviewJob(jobId, reviewerId, i
 
 ## Query Patterns
 
+## Scenario: Global Data Center Catalog
+
+### 1. Scope / Trigger
+- Applies to task directory, dataset creation/binding, tree reads, and release cleanup (migrations 024/025).
+
+### 2. Signatures
+- `GET/POST /api/v1/task-categories`, `PATCH /task-categories/:id`.
+- `POST /api/v1/task-categories/:id/task-types`, `PATCH /task-types/:id`.
+- `GET /api/v1/data-center/tree` and `PATCH /datasets/:datasetId/task-type`.
+- `npm run datasets:reset-catalog` previews; `npm run datasets:reset-catalog -- --apply` performs the one-time reset.
+
+### 3. Contracts
+- All directory/tree/binding APIs require admin. Catalog and tree queries are global, with no workspace predicate.
+- Dataset creation requires `taskTypeId`; both task and parent must be enabled. Classification does not constrain annotation geometry or model type.
+- Codes are server-generated, unique and immutable. Task names are unique within the category, including disabled tasks. There are no physical directory delete endpoints.
+- Binding takes `{ taskTypeId, expectedTaskTypeId, confirmed: true }`; update and `dataset.task_type.update` audit commit together.
+- Tree takes `from/to` dates, browser `timezoneOffset` in minutes west of UTC, category/task codes, literal `query`, page and pageSize. End date is inclusive; SQL uses next-day exclusive bound. Counts and leaves use one repeatable-read snapshot; retry serialization failures at most twice.
+- Reconcile actual image/document review states before filtering `可训练`; do not write unchanged aggregates. Reopening clears `approved_at`.
+- Cleanup uses `DATABASE_URL`, optional `REDIS_URL`, `FORGE_ARTIFACT_ROOT`; stop API/workers and back up DB first. It removes scoped terminal queue tasks and DB rows, moves managed directories to a recovery sibling, and writes `dataset.catalog_reset`. A repeated invocation is a no-op, protecting post-release datasets. Never put reset in service startup.
+
+### 4. Validation & Error Matrix
+- Non-admin -> 403; missing task, invalid date range, editable code or missing confirmation -> 400.
+- Disabled parent/task -> 409 `TASK_TYPE_UNAVAILABLE`; duplicate name/code or stale expected binding -> 409.
+- Active task during reset -> fail without deleting dataset records; failed file/DB operation rolls back DB and restores moved directories.
+- Migration 025 with unclassified historical datasets -> fail with explicit reset instruction.
+
+### 5. Good/Base/Bad Cases
+- Good: disabled business task remains visible with historical approved datasets and cannot receive new bindings.
+- Base: empty catalog has five categories and no business tasks; new dataset creation waits for an administrator-created task.
+- Bad: infer annotation geometry from category name, silently drop incompatible export annotations, or apply workspace filtering to the tree.
+
+### 6. Tests Required
+- `server/taskCatalog.test.ts`: counts, pagination, date boundary, disabled names, audit and stale binding.
+- `server/taskCatalog.pg.test.ts`: run only with disposable `CATALOG_TEST_DATABASE_URL`; migrations, parallel tree reads, SQL constraints, binding concurrency, cleanup recovery and idempotency.
+- `server/api.test.ts`: admin enforcement, strict payloads and missing classification.
+- `src/pages/DataCenterPage.test.tsx` and `VITE_API_ENABLED=true npx playwright test e2e/data-center.spec.ts`: filters, details, rebind, directory maintenance and desktop/mobile overflow.
+
+### 7. Wrong vs Correct
+- Wrong: `DELETE FROM datasets` in an automatic startup migration.
+- Correct: reviewed reset preview, database backup, stopped writers, explicit `--apply`, then migration and restart on existing ports.
+
 <!-- How should queries be written? Batch operations? -->
 
 (To be filled by the team)

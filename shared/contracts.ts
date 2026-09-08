@@ -30,7 +30,6 @@ export type AnnotationReviewStatus = (typeof annotationReviewStatuses)[number];
 export const annotationReviewDecisions = ['approve', 'reject'] as const;
 export type AnnotationReviewDecision = (typeof annotationReviewDecisions)[number];
 
-export type DatasetType = '目标检测' | '语义分割' | '关键点';
 export const annotationTaskStatuses = ['draft', 'processing', 'ready', 'annotating', 'reviewing', 'paused', 'completed', 'cancelled'] as const;
 export type AnnotationTaskStatus = (typeof annotationTaskStatuses)[number];
 export interface AnnotationTask {
@@ -203,12 +202,12 @@ export interface LoginResponse {
 
 export interface Dataset {
   id: string;
+  taskTypeId?: string;
+  createdAt?: string;
+  approvedAt?: string;
   name: string;
   description: string;
   version: string;
-  legacyType?: DatasetType;
-  /** @deprecated Legacy in-memory fixtures only. New API responses use legacyType. */
-  type?: DatasetType;
   images: number;
   annotated: number;
   classes: string[];

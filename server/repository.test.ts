@@ -116,7 +116,7 @@ describe('PgRepository annotation statistics', () => {
 describe('MemoryRepository training snapshots', () => {
   it('includes approved jobs whose frames have empty annotations', async () => {
     const repository = new MemoryRepository();
-    const dataset = await repository.createDataset({ name: 'Empty frame dataset', description: '', version: 'v1', classes: ['background'] });
+    const dataset = await repository.createDataset({ taskTypeId: await createTestTaskType(repository), name: 'Empty frame dataset', description: '', version: 'v1', classes: ['background'] });
     const image = await repository.createDatasetImage({ datasetId: dataset.id, filename: 'empty.png', mimeType: 'image/png', sizeBytes: 1, objectKey: `datasets/${dataset.id}/empty.png`, split: 'train' });
     const task = await repository.getAnnotationTask(dataset.id);
     await repository.createAnnotationSegments([{ id: 'segment-empty-frame', datasetId: dataset.id, annotationTaskId: task!.id, sequence: 1, startItemId: image.id, endItemId: image.id, itemCount: 1 }]);
@@ -138,7 +138,7 @@ describe('MemoryRepository training snapshots', () => {
 describe('MemoryRepository annotation progress', () => {
   it('counts empty frames as annotated after a job is submitted', async () => {
     const repository = new MemoryRepository();
-    const dataset = await repository.createDataset({ name: 'Submitted empty frames', description: '', version: 'v1', classes: [] });
+    const dataset = await repository.createDataset({ taskTypeId: await createTestTaskType(repository), name: 'Submitted empty frames', description: '', version: 'v1', classes: [] });
     const first = await repository.createDatasetImage({ datasetId: dataset.id, filename: 'first.png', mimeType: 'image/png', sizeBytes: 1, objectKey: `datasets/${dataset.id}/first.png`, split: 'train' });
     const second = await repository.createDatasetImage({ datasetId: dataset.id, filename: 'second.png', mimeType: 'image/png', sizeBytes: 1, objectKey: `datasets/${dataset.id}/second.png`, split: 'train' });
     const task = await repository.getAnnotationTask(dataset.id);
@@ -151,3 +151,4 @@ describe('MemoryRepository annotation progress', () => {
     await expect(repository.getDataset(dataset.id)).resolves.toMatchObject({ images: 2, annotated: 2, status: '待审核' });
   });
 });
+import { createTestTaskType } from './testCatalogFixtures';

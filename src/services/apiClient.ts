@@ -1,5 +1,6 @@
 import type { AnnotationDocument, AnnotationImageAttributes, AnnotationJob, AnnotationRecord, AnnotationReviewDecisionInput, AnnotationReviewSummary, AnnotationSegment, AnnotationStatistics, AnnotatorPerformance, AnnotatorPerformanceFilter, AnnotationTask, ApiErrorEnvelope, Artifact, AuthUser, ConversionTask, Dataset, DatasetDeletionPreview, DatasetImage, DatasetLabel, DatasetProcessingConfig, ExportTask, ImageCaption, LoginResponse, ModelVersion, ProcessingRun, ResourceDeletionResult, RuntimeCapabilities, SourceAsset, SystemSettings, TrainingDraft, TrainingEvent, TrainingJob, TrainingObservability, UploadSession, WorkspaceActivity } from '../../shared/contracts';
 import { inferSourceAssetUpload } from '../utils/uploadMetadata';
+import type { CatalogInput, DataCenterQuery, DataCenterResult, TaskCatalog, TaskCategory } from '../../shared/taskCatalog';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? '/api/v1';
 export const apiEnabled = import.meta.env.VITE_API_ENABLED === 'true';
@@ -13,6 +14,20 @@ export class ApiClientError extends Error {
 
 export class ApiClient {
   constructor(private readonly getToken: () => string | null) {}
+
+  taskCatalog() { return this.request<TaskCatalog>('/task-categories'); }
+  saveCatalog(kind: 'category' | 'task', id: string | null, input: Partial<CatalogInput>, categoryId?: string) {
+    const path = kind === 'category' ? `/task-categories${id ? `/${encodeURIComponent(id)}` : ''}` : id ? `/task-types/${encodeURIComponent(id)}` : `/task-categories/${encodeURIComponent(categoryId ?? '')}/task-types`;
+    return this.request<TaskCategory>(path, { method: id ? 'PATCH' : 'POST', body: JSON.stringify(input) });
+  }
+  dataCenter(input: Partial<DataCenterQuery>) {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(input)) if (value !== undefined && value !== '') query.set(key, String(value));
+    return this.request<DataCenterResult>(`/data-center/tree?${query}`);
+  }
+  bindDataset(datasetId: string, taskTypeId: string, expectedTaskTypeId: string | null) {
+    return this.request<Dataset>(`/datasets/${encodeURIComponent(datasetId)}/task-type`, { method: 'PATCH', body: JSON.stringify({ taskTypeId, expectedTaskTypeId, confirmed: true }) });
+  }
 
   private async fetch(input: string, init?: RequestInit) {
     try {
@@ -89,7 +104,7 @@ export class ApiClient {
   annotationStatistics(datasetId?: string) { return this.request<AnnotationStatistics>(`/annotation-statistics${datasetId ? `?datasetId=${encodeURIComponent(datasetId)}` : ''}`); }
   annotatorPerformance(filter: AnnotatorPerformanceFilter = {}) { const params = new URLSearchParams(); if (filter.startDate) params.set('startDate', filter.startDate); if (filter.endDate) params.set('endDate', filter.endDate); const query = params.toString(); return this.request<{ items: AnnotatorPerformance[] }>(`/annotation-statistics/annotators${query ? `?${query}` : ''}`); }
   datasets() { return this.request<{ items: Dataset[] }>('/datasets'); }
-  createDataset(input: { name: string; description: string; version: string; classes: string[]; labels?: DatasetLabel[]; annotatorIds?: string[]; reviewerIds?: string[]; processingConfig?: DatasetProcessingConfig }) { return this.request<Dataset>('/datasets', { method: 'POST', body: JSON.stringify(input) }); }
+  createDataset(input: { taskTypeId: string; name: string; description: string; version: string; classes: string[]; labels?: DatasetLabel[]; annotatorIds?: string[]; reviewerIds?: string[]; processingConfig?: DatasetProcessingConfig }) { return this.request<Dataset>('/datasets', { method: 'POST', body: JSON.stringify(input) }); }
   updateDatasetClasses(datasetId: string, classes: string[]) { return this.request<Dataset>(`/datasets/${datasetId}/classes`, { method: 'PATCH', body: JSON.stringify({ classes }) }); }
   updateDatasetLabels(datasetId: string, labels: DatasetLabel[]) { return this.request<Dataset>(`/datasets/${datasetId}/labels`, { method: 'PATCH', body: JSON.stringify({ labels }) }); }
   deleteDataset(datasetId: string) { return this.request<ResourceDeletionResult>(`/datasets/${datasetId}`, { method: 'DELETE', headers: { 'x-confirm-resource-id': datasetId } }); }

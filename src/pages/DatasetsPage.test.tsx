@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthUser, Dataset } from '../types';
 import { DatasetsPage } from './DatasetsPage';
+import { ApiClient } from '../services/apiClient';
 
 const mocks = vi.hoisted(() => ({
   datasets: [] as Dataset[],
@@ -57,6 +58,7 @@ vi.mock('../context/AppContext', () => ({
 
 describe('DatasetsPage create-task form', () => {
   beforeEach(() => {
+    vi.spyOn(ApiClient.prototype, 'taskCatalog').mockResolvedValue({ categories: [{ id: 'c1', code: 'c1', name: '检测', description: '', enabled: true, sortOrder: 0, createdAt: '' }], taskTypes: [{ id: 't1', code: 't1', name: '缺陷检测', categoryId: 'c1', description: '', enabled: true, sortOrder: 0, createdAt: '', datasetCount: 0 }] });
     mocks.datasets.length = 0;
     mocks.session.user.role = 'admin';
     mocks.createDataset.mockReset();
@@ -89,6 +91,8 @@ describe('DatasetsPage create-task form', () => {
     render(<MemoryRouter><DatasetsPage /></MemoryRouter>);
     fireEvent.click(screen.getByRole('button', { name: '创建任务' }));
     fireEvent.change(screen.getByLabelText('数据集名称'), { target: { value: 'A' } });
+    await screen.findByRole('option', { name: '缺陷检测' });
+    fireEvent.change(screen.getByLabelText('业务任务'), { target: { value: 't1' } });
     fireEvent.click(screen.getByRole('button', { name: '添加标签' }));
     fireEvent.change(screen.getByLabelText('标签名称 1'), { target: { value: '缺陷' } });
     fireEvent.click(screen.getByRole('button', { name: '创建并上传' }));

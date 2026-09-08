@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { EmptyState, Modal, PageHeader, Pagination, ProgressBar } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { dataFormatDescriptions, taskLabels } from '../data/catalog';
+import { BusinessTaskSelect } from '../components/BusinessTaskSelect';
 import type { AnnotationJob, AnnotationSegment, AnnotationTask, DataFormat, Dataset, DatasetDeletionPreview, DatasetLabel, DatasetProcessingConfig, ExportTask, ProcessingRun, SourceAsset, TrainingType, UploadSession } from '../types';
 import { formatPercent } from '../utils/format';
 import { effectiveUserRoles } from '../../shared/contracts';
@@ -74,6 +75,7 @@ export function DatasetsPage({ pageTitle = '数据中心' }: { pageTitle?: strin
   const userRoles = session ? effectiveUserRoles(session.user) : [];
   const canReview = userRoles.includes('admin') || userRoles.includes('reviewer');
   const isAdmin = userRoles.includes('admin');
+  const [datasetTaskTypeId, setDatasetTaskTypeId] = useState('');
   const canManageAssets = isAdmin;
   const annotators = users.filter((user) => user.enabled !== false && (user.roles ?? [user.role]).includes('annotator'));
   const reviewers = users.filter((user) => user.enabled !== false && (user.roles ?? [user.role]).includes('reviewer'));
@@ -289,6 +291,7 @@ export function DatasetsPage({ pageTitle = '数据中心' }: { pageTitle?: strin
       return;
     }
     const input = {
+      taskTypeId: datasetTaskTypeId,
       name: datasetName.trim(),
       description: datasetDescription.trim(),
       version: datasetVersion.trim() || 'v1',
@@ -501,7 +504,7 @@ export function DatasetsPage({ pageTitle = '数据中心' }: { pageTitle?: strin
               ))}
             </div>
           </div>
-          <label className="form-field"><span>版本名称</span><input value={exportVersionName || `${exportDataset.name}_${exportDataset.version}`} onChange={(event) => setExportVersionName(event.target.value)} /><small>按整个数据集导出，未审核、未标注或当前格式无法表达的图片会自动跳过。</small></label>
+          <label className="form-field"><span>版本名称</span><input value={exportVersionName || `${exportDataset.name}_${exportDataset.version}`} onChange={(event) => setExportVersionName(event.target.value)} /><small>仅导出审核通过的标注；存在当前格式无法表达的标注时，导出失败并提示原因。</small></label>
           <label className="check-row"><input type="checkbox" checked={includeImages} onChange={(event) => setIncludeImages(event.target.checked)} /><span><strong>包含已标注原始图像</strong><small>未标注图片不会进入导出包，数据集已标注 {exportDataset.annotated.toLocaleString()} / {exportDataset.images.toLocaleString()} 张</small></span></label>
           <section className="export-history">
             <div className="section-header"><div><h3>导出记录</h3><p>任务状态会自动刷新</p></div></div>
@@ -522,6 +525,7 @@ export function DatasetsPage({ pageTitle = '数据中心' }: { pageTitle?: strin
         <div className="dataset-create-form"><div className="dataset-form-heading"><span>01</span><div><strong>基础配置</strong><small>设置任务名称、版本和标注类别</small></div></div><div className="form-grid two dataset-create-grid">
           <label className="form-field"><span>数据集名称</span><input value={datasetName} onChange={(event) => setDatasetName(event.target.value)} placeholder="例如：焊点缺陷检测" /></label>
           <label className="form-field"><span>版本</span><input value={datasetVersion} onChange={(event) => setDatasetVersion(event.target.value)} /></label>
+          <BusinessTaskSelect value={datasetTaskTypeId} onChange={setDatasetTaskTypeId} disabled={submittingDataset} />
           <label className="form-field form-field-full"><span>说明</span><textarea value={datasetDescription} onChange={(event) => setDatasetDescription(event.target.value)} placeholder="记录采集场景、样本来源或标注规范" /></label>
         </div>
         {isAdmin && <><div className="dataset-form-heading"><span>02</span><div><strong>人员分配</strong><small>配置该任务可领取和审核的人员</small></div></div><div className="assignment-grid"><div><strong>标注员</strong><small>只允许所选标注员领取该数据集 Job</small><details className="member-select"><summary><span>{datasetAnnotatorIds.length ? `已选择 ${datasetAnnotatorIds.length} 人` : '请选择标注员'}</span><ChevronDown size={15} /></summary><div className="member-select-panel"><header><span>可用标注员（{annotators.length}）</span><div><button type="button" onClick={() => setDatasetAnnotatorIds(annotators.map((user) => user.id))} disabled={!annotators.length}>全选</button><button type="button" onClick={() => setDatasetAnnotatorIds([])} disabled={!datasetAnnotatorIds.length}>清空</button></div></header>{annotators.length ? <div className="member-select-options">{annotators.map((user) => <label key={user.id}><input type="checkbox" checked={datasetAnnotatorIds.includes(user.id)} onChange={(event) => setDatasetAnnotatorIds((current) => event.target.checked ? [...new Set([...current, user.id])] : current.filter((id) => id !== user.id))} /><span><strong>{user.displayName}</strong><small>{user.username}</small></span></label>)}</div> : <p className="cell-subtext">暂无可用标注员，请先在系统管理创建用户</p>}</div></details></div><div><strong>审核员</strong><small>只允许所选审核员领取审核 Job</small><details className="member-select"><summary><span>{datasetReviewerIds.length ? `已选择 ${datasetReviewerIds.length} 人` : '请选择审核员'}</span><ChevronDown size={15} /></summary><div className="member-select-panel"><header><span>可用审核员（{reviewers.length}）</span><div><button type="button" onClick={() => setDatasetReviewerIds(reviewers.map((user) => user.id))} disabled={!reviewers.length}>全选</button><button type="button" onClick={() => setDatasetReviewerIds([])} disabled={!datasetReviewerIds.length}>清空</button></div></header>{reviewers.length ? <div className="member-select-options">{reviewers.map((user) => <label key={user.id}><input type="checkbox" checked={datasetReviewerIds.includes(user.id)} onChange={(event) => setDatasetReviewerIds((current) => event.target.checked ? [...new Set([...current, user.id])] : current.filter((id) => id !== user.id))} /><span><strong>{user.displayName}</strong><small>{user.username}</small></span></label>)}</div> : <p className="cell-subtext">暂无可用审核员，请先在系统管理创建用户</p>}</div></details></div></div></>}

@@ -44,6 +44,15 @@ const failedTrainingJob: TrainingJob = {
 };
 const repositoryFixtures = { users: testUsers, datasets: testDatasets };
 
+async function createBusinessTask(app: FastifyInstance, token: string) {
+  const headers = { authorization: `Bearer ${token}` };
+  const catalog = await app.inject({ method: 'GET', url: '/api/v1/task-categories', headers });
+  const categoryId = catalog.json<{ categories: Array<{ id: string }> }>().categories[0].id;
+  const response = await app.inject({ method: 'POST', url: `/api/v1/task-categories/${categoryId}/task-types`, headers, payload: { name: '测试业务任务' } });
+  expect(response.statusCode).toBe(201);
+  return response.json<{ id: string }>().id;
+}
+
 class ArtifactRepository extends MemoryRepository {
   override async getArtifact(id: string) {
     if (id === 'artifact-export-1') return { id, objectKey: 'exports/export-1/dataset.json', filename: 'dataset.json', mimeType: 'application/json', sizeBytes: 2, sha256: 'test-sha256', sourceType: 'export_task', sourceId: 'export-1', createdAt: new Date(0).toISOString() };
@@ -102,6 +111,33 @@ describe('product API', () => {
     expect(await emptyRepository.listConversions()).toEqual([]);
   });
 
+  it('restricts global catalogs to admins and validates immutable codes and mandatory bindings', async () => {
+    const token = await login('admin');
+    const headers = { authorization: `Bearer ${token}` };
+    const taskTypeId = await createBusinessTask(app, token);
+    await app.inject({ method: 'PATCH', url: `/api/v1/task-types/${taskTypeId}`, headers, payload: { description: '保持说明', sortOrder: 7, enabled: false } });
+    const renamed = await app.inject({ method: 'PATCH', url: `/api/v1/task-types/${taskTypeId}`, headers, payload: { name: '仅改名称' } });
+    expect(renamed.json()).toMatchObject({ description: '保持说明', sortOrder: 7, enabled: false });
+    await app.inject({ method: 'PATCH', url: `/api/v1/task-types/${taskTypeId}`, headers, payload: { enabled: true } });
+    const viewer = { authorization: `Bearer ${await login('reviewer')}` };
+    for (const url of ['/api/v1/task-categories', '/api/v1/data-center/tree']) {
+      expect((await app.inject({ method: 'GET', url, headers: viewer })).statusCode).toBe(403);
+    }
+    expect((await app.inject({ method: 'PATCH', url: `/api/v1/task-types/${taskTypeId}`, headers, payload: { code: 'replacement' } })).statusCode).toBe(400);
+    const payload = { name: '必须分类', description: '', version: 'v1', classes: [] };
+    expect((await app.inject({ method: 'POST', url: '/api/v1/datasets', headers, payload })).statusCode).toBe(400);
+    const created = await app.inject({ method: 'POST', url: '/api/v1/datasets', headers, payload: { ...payload, taskTypeId } });
+    expect(created.statusCode).toBe(201);
+    const datasetId = created.json<{ id: string }>().id;
+    const url = `/api/v1/datasets/${datasetId}/task-type`;
+    expect((await app.inject({ method: 'PATCH', url, headers, payload: { taskTypeId, expectedTaskTypeId: taskTypeId } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'PATCH', url, headers: viewer, payload: { taskTypeId, expectedTaskTypeId: taskTypeId, confirmed: true } })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'PATCH', url, headers, payload: { taskTypeId, expectedTaskTypeId: null, confirmed: true } })).statusCode).toBe(409);
+    expect((await app.inject({ method: 'GET', url: '/api/v1/data-center/tree?from=2026-09-09&to=2026-09-08', headers })).statusCode).toBe(400);
+    const tree = await app.inject({ method: 'GET', url: '/api/v1/data-center/tree', headers });
+    expect(tree.json()).toMatchObject({ total: 0, items: [] });
+  });
+
   it('authenticates a local account and returns the current user', async () => {
     const token = await login('admin');
     const response = await app.inject({ method: 'GET', url: '/api/v1/auth/me', headers: { authorization: `Bearer ${token}` } });
@@ -145,7 +181,7 @@ describe('product API', () => {
 
   it('uploads a resumable source asset without starting processing', async () => {
     const adminToken = await login('admin');
-    const dataset = await app.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { name: 'Upload Dataset', description: '', version: 'v1', classes: [] } });
+    const dataset = await app.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { taskTypeId: await createBusinessTask(app, adminToken), name: 'Upload Dataset', description: '', version: 'v1', classes: [] } });
     const task = await app.inject({ method: 'GET', url: `/api/v1/datasets/${dataset.json<{ id: string }>().id}/annotation-task`, headers: { authorization: `Bearer ${adminToken}` } });
     expect(task.statusCode).toBe(200);
     expect(task.json()).toMatchObject({ datasetId: dataset.json<{ id: string }>().id, status: 'draft', name: '默认标注任务' });
@@ -178,7 +214,7 @@ describe('product API', () => {
     app = await buildApi({ config: loadConfig({ JWT_SECRET: 'test-secret', CORS_ORIGIN: 'http://localhost:5173', FORGE_ARTIFACT_ROOT: artifactRoot }), repository: new ExpiredUploadRepository(repositoryFixtures), queue });
     try {
       const token = await login('admin');
-      const dataset = await app.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${token}` }, payload: { name: 'Expired Upload Dataset', description: '', version: 'v1', classes: [] } });
+      const dataset = await app.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${token}` }, payload: { taskTypeId: await createBusinessTask(app, token), name: 'Expired Upload Dataset', description: '', version: 'v1', classes: [] } });
       const create = await app.inject({ method: 'POST', url: `/api/v1/datasets/${dataset.json<{ id: string }>().id}/upload-sessions`, headers: { authorization: `Bearer ${token}` }, payload: { filename: 'expired.zip', mimeType: 'application/zip', sizeBytes: 8, type: 'archive' } });
       const session = create.json<{ id: string }>();
       await stat(join(artifactRoot, 'upload-sessions', session.id, 'parts'));
@@ -202,7 +238,7 @@ describe('product API', () => {
     try {
       const adminToken = await loginWith(localApp, 'admin');
       const annotatorToken = await loginWith(localApp, 'annotator');
-      const dataset = await localApp.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { name: 'Job Dataset', description: '', version: 'v1', classes: [] } });
+      const dataset = await localApp.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { taskTypeId: await createBusinessTask(localApp, adminToken), name: 'Job Dataset', description: '', version: 'v1', classes: [] } });
       const datasetId = dataset.json<{ id: string }>().id;
       const task = await repository.getAnnotationTask(datasetId);
       await repository.createAnnotationSegments([{ id: 'segment-job-1', datasetId, annotationTaskId: task!.id, sourceAssetId: 'asset-job', sequence: 1, startItemId: 'image-job-1', endItemId: 'image-job-1', itemCount: 1 }, { id: 'segment-job-2', datasetId, annotationTaskId: task!.id, sourceAssetId: 'asset-job', sequence: 2, startItemId: 'image-job-2', endItemId: 'image-job-2', itemCount: 1 }]);
@@ -246,7 +282,7 @@ describe('product API', () => {
     const localApp = await buildApi({ config: loadConfig({ JWT_SECRET: 'test-secret', CORS_ORIGIN: 'http://localhost:5173' }), repository, queue: new MemoryTaskQueue() });
     try {
       const adminToken = await loginWith(localApp, 'admin');
-      const dataset = await localApp.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { name: 'Selected Review Job Dataset', description: '', version: 'v1', classes: [] } });
+      const dataset = await localApp.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { taskTypeId: await createBusinessTask(localApp, adminToken), name: 'Selected Review Job Dataset', description: '', version: 'v1', classes: [] } });
       const datasetId = dataset.json<{ id: string }>().id;
       const task = await repository.getAnnotationTask(datasetId);
       await repository.createAnnotationSegments([
@@ -277,7 +313,7 @@ describe('product API', () => {
     try {
       const adminToken = await loginWith(localApp, 'admin');
       const reviewerToken = await loginWith(localApp, 'reviewer');
-      const dataset = await localApp.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { name: 'Open Task Dataset', description: '', version: 'v1', classes: [] } });
+      const dataset = await localApp.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { taskTypeId: await createBusinessTask(localApp, adminToken), name: 'Open Task Dataset', description: '', version: 'v1', classes: [] } });
       const datasetId = dataset.json<{ id: string }>().id;
       const task = await repository.getAnnotationTask(datasetId);
       await repository.createAnnotationSegments([{ id: 'segment-open-1', datasetId, annotationTaskId: task!.id, sequence: 1, startItemId: 'image-open-1', endItemId: 'image-open-1', itemCount: 1 }]);
@@ -299,7 +335,7 @@ describe('product API', () => {
     try {
       const adminToken = await loginWith(localApp, 'admin');
       const annotatorToken = await loginWith(localApp, 'annotator');
-      const dataset = await localApp.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { name: 'Scoped Dataset', description: '', version: 'v1', classes: [] } });
+      const dataset = await localApp.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { taskTypeId: await createBusinessTask(localApp, adminToken), name: 'Scoped Dataset', description: '', version: 'v1', classes: [] } });
       const datasetId = dataset.json<{ id: string }>().id;
       const task = await repository.createAnnotationTask(datasetId);
       const first = await repository.createDatasetImage({ datasetId, filename: 'first.jpg', mimeType: 'image/jpeg', sizeBytes: 1, objectKey: 'datasets/scoped/first.jpg', split: 'train' });
@@ -332,7 +368,7 @@ describe('product API', () => {
       const adminToken = await loginWith(localApp, 'admin');
       const annotatorToken = await loginWith(localApp, 'annotator');
       const reviewerToken = await loginWith(localApp, 'reviewer');
-      const dataset = await repository.createDataset({ name: 'Attribution Dataset', description: '', version: 'v1', classes: ['defect'] });
+      const dataset = await repository.createDataset({ taskTypeId: await createTestTaskType(repository), name: 'Attribution Dataset', description: '', version: 'v1', classes: ['defect'] });
       const image = await repository.createDatasetImage({ datasetId: dataset.id, filename: 'frame.jpg', mimeType: 'image/jpeg', sizeBytes: 1, objectKey: `datasets/${dataset.id}/frame.jpg`, split: 'train' });
       const task = await repository.getAnnotationTask(dataset.id);
       await repository.createAnnotationSegments([{ id: 'segment-attribution', datasetId: dataset.id, annotationTaskId: task!.id, sequence: 1, startItemId: image.id, endItemId: image.id, itemCount: 1 }]);
@@ -367,7 +403,7 @@ describe('product API', () => {
     try {
       const adminToken = await loginWith(localApp, 'admin');
       const annotatorToken = await loginWith(localApp, 'annotator');
-      const dataset = await localApp.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { name: 'Operations Dataset', description: '', version: 'v1', classes: [] } });
+      const dataset = await localApp.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { taskTypeId: await createBusinessTask(localApp, adminToken), name: 'Operations Dataset', description: '', version: 'v1', classes: [] } });
       const datasetId = dataset.json<{ id: string }>().id;
       const task = await repository.getAnnotationTask(datasetId);
       await repository.createAnnotationSegments([{ id: 'segment-operations-1', datasetId, annotationTaskId: task!.id, sourceAssetId: 'asset-operations', sequence: 1, startItemId: 'image-operations-1', endItemId: 'image-operations-1', itemCount: 1 }]);
@@ -407,7 +443,7 @@ describe('product API', () => {
     try {
       const adminToken = await loginWith(localApp, 'admin');
       const annotatorToken = await loginWith(localApp, 'annotator');
-      const dataset = await localApp.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { name: 'Label Schema Dataset', description: '', version: 'v1', classes: ['defect'] } });
+      const dataset = await localApp.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { taskTypeId: await createBusinessTask(localApp, adminToken), name: 'Label Schema Dataset', description: '', version: 'v1', classes: ['defect'] } });
       const datasetId = dataset.json<{ id: string }>().id;
       const labels = [{ name: 'defect', color: '#2383f2', attributes: [{ name: 'severity', type: 'enum', values: ['low', 'high'], required: true }, { name: 'verified', type: 'boolean' }, { name: 'count', type: 'integer' }, { name: 'note', type: 'text' }] }];
       const updated = await localApp.inject({ method: 'PATCH', url: `/api/v1/datasets/${datasetId}/labels`, headers: { authorization: `Bearer ${adminToken}` }, payload: { labels } });
@@ -427,7 +463,7 @@ describe('product API', () => {
   it('queues explicit media processing for administrators only', async () => {
     const adminToken = await login('admin');
     const reviewerToken = await login('reviewer');
-    const dataset = await app.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { name: 'Processing Dataset', description: '', version: 'v1', classes: [] } });
+    const dataset = await app.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${adminToken}` }, payload: { taskTypeId: await createBusinessTask(app, adminToken), name: 'Processing Dataset', description: '', version: 'v1', classes: [] } });
     const datasetId = dataset.json<{ id: string }>().id;
     const image = PNG.sync.write(new PNG({ width: 4, height: 2 }));
     const uploaded = await app.inject({ method: 'PUT', url: `/api/v1/datasets/${datasetId}/images`, headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/octet-stream', 'x-file-name': 'queued.png', 'x-file-mime-type': 'image/png' }, payload: image });
@@ -452,15 +488,13 @@ describe('product API', () => {
       method: 'POST',
       url: '/api/v1/datasets',
       headers: { authorization: `Bearer ${token}` },
-      payload: { name: 'Activity Dataset', description: 'activity feed test', version: 'v1', classes: ['defect'] },
+      payload: { taskTypeId: await createBusinessTask(app, token), name: 'Activity Dataset', description: 'activity feed test', version: 'v1', classes: ['defect'] },
     });
     expect(created.statusCode).toBe(201);
 
     const response = await app.inject({ method: 'GET', url: '/api/v1/activities', headers: { authorization: `Bearer ${token}` } });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
-      items: [{ action: 'dataset.create', entityType: 'dataset', metadata: { name: 'Activity Dataset' }, actor: { id: 'test-admin', displayName: 'Test Admin' } }],
-    });
+    expect(response.json<{ items: unknown[] }>().items[0]).toMatchObject({ action: 'dataset.create', entityType: 'dataset', metadata: { name: 'Activity Dataset' }, actor: { id: 'test-admin', displayName: 'Test Admin' } });
     expect(response.json<{ items: Array<{ action: string }> }>().items.some((activity) => activity.action === 'auth.login')).toBe(false);
   });
 
@@ -709,7 +743,7 @@ describe('product API', () => {
     app = await buildApi({ config: loadConfig({ JWT_SECRET: 'test-secret', CORS_ORIGIN: 'http://localhost:5173', FORGE_ARTIFACT_ROOT: artifactRoot }), repository: new MemoryRepository({ users: testUsers }), queue });
     try {
       const token = await login('admin');
-      const created = await app.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${token}` }, payload: { name: 'Uploaded Images', description: 'binary upload test', version: 'v1', classes: ['defect'] } });
+      const created = await app.inject({ method: 'POST', url: '/api/v1/datasets', headers: { authorization: `Bearer ${token}` }, payload: { taskTypeId: await createBusinessTask(app, token), name: 'Uploaded Images', description: 'binary upload test', version: 'v1', classes: ['defect'] } });
       expect(created.statusCode).toBe(201);
       const dataset = created.json<Dataset>();
 
@@ -907,3 +941,4 @@ describe('product API', () => {
     }
   });
 });
+import { createTestTaskType } from './testCatalogFixtures';

@@ -204,6 +204,7 @@ export const exportRequestSchema = z.object({
 });
 
 export const datasetCreateSchema = z.object({
+  taskTypeId: z.string().trim().min(1, '请选择业务任务').max(160),
   name: z.string().trim().min(2).max(120),
   description: z.string().trim().max(1000).default(''),
   version: z.string().trim().min(1).max(40).default('v1'),

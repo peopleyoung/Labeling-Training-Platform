@@ -1254,6 +1254,8 @@ kbd { padding: 2px 6px; border: 1px solid #d2dbe3; border-radius: 4px; color: #7
 .processing-progress-ring span { position: relative; z-index: 1; color: #fff; font-size: 6px; font-weight: 700; }
 .admin-layout { grid-template-columns: minmax(0, 1fr); }
 .admin-users-card { grid-column: 1; }
+.admin-catalog-card { grid-column: 1; }
+.admin-catalog-description { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
 .performance-overview { margin-bottom: 18px; }
 .performance-filter-card { margin-bottom: 18px; }
 .performance-filters { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px; }

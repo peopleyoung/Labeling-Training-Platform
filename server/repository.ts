@@ -6,6 +6,7 @@ import { roleAliases } from '../shared/contracts';
 import { attributeAnnotations } from './annotationAttribution';
 import { RepositoryConflictError, RepositoryStateError } from './errors';
 import { workspaceId } from './workspace';
+import { MemoryCatalogRepository, PgCatalogRepository, type CatalogRepository } from './taskCatalog';
 
 export interface StoredUser extends AuthUser {
   passwordHash: string;
@@ -49,6 +50,7 @@ export interface SaveAnnotationsInput {
 }
 
 export interface Repository {
+  readonly catalog: CatalogRepository;
   close(): Promise<void>;
   findUserByUsername(username: string): Promise<StoredUser | null>;
   findUserById(id: string): Promise<StoredUser | null>;
@@ -88,7 +90,7 @@ export interface Repository {
   reassignAnnotationJob(id: string, assigneeId: string): Promise<AnnotationJob | null>;
   listDatasets(): Promise<Dataset[]>;
   getDataset(id: string): Promise<Dataset | null>;
-  createDataset(input: { name: string; description: string; version: string; classes: string[]; labels?: DatasetLabel[]; annotatorIds?: string[]; reviewerIds?: string[]; processingConfig?: DatasetProcessingConfig }): Promise<Dataset>;
+  createDataset(input: { taskTypeId: string; name: string; description: string; version: string; classes: string[]; labels?: DatasetLabel[]; annotatorIds?: string[]; reviewerIds?: string[]; processingConfig?: DatasetProcessingConfig }): Promise<Dataset>;
   updateDatasetClasses(id: string, classes: string[]): Promise<Dataset | null>;
   updateDatasetLabels(id: string, labels: DatasetLabel[]): Promise<Dataset | null>;
   getDatasetDeletionPlan(id: string): Promise<DatasetDeletionPlan | null>;
@@ -186,6 +188,7 @@ function newTrainingJob(input: { draft: TrainingDraft; datasetName: string; crea
 }
 
 export class MemoryRepository implements Repository {
+  readonly catalog = new MemoryCatalogRepository(() => this.datasets, (actorId, action, entityId, metadata) => this.writeAudit({ actorId, action, entityType: action.startsWith('dataset.') ? 'dataset' : 'catalog', entityId, metadata }));
   private readonly users: StoredUser[];
   private readonly datasets: Dataset[];
   private readonly jobs: TrainingJob[];
@@ -327,9 +330,11 @@ export class MemoryRepository implements Repository {
   }
   async listDatasets() { return structuredClone(this.datasets); }
   async getDataset(id: string) { return structuredClone(this.datasets.find((dataset) => dataset.id === id) ?? null); }
-  async createDataset(input: { name: string; description: string; version: string; classes: string[]; labels?: DatasetLabel[]; annotatorIds?: string[]; reviewerIds?: string[]; processingConfig?: DatasetProcessingConfig }) {
+  async createDataset(input: { taskTypeId: string; name: string; description: string; version: string; classes: string[]; labels?: DatasetLabel[]; annotatorIds?: string[]; reviewerIds?: string[]; processingConfig?: DatasetProcessingConfig }) {
+    await this.catalog.assertBindable(input.taskTypeId);
     const labels = input.labels?.length ? structuredClone(input.labels) : undefined;
     const dataset: Dataset = { id: `dataset-${randomUUID()}`, ...input, classes: labels ? labels.map((label) => label.name) : input.classes, labels, processingConfig: input.processingConfig ?? { segmentSize: 100, extractionStrategy: 'frame_step', frameStep: 1, imageQuality: 95, overlapSize: 0, useZipBlocks: false, zOrder: false }, annotatorIds: [...new Set(input.annotatorIds ?? [])], reviewerIds: [...new Set(input.reviewerIds ?? [])], images: 0, annotated: 0, size: '0 B', status: '标注中', updatedAt: new Date().toISOString() };
+    dataset.createdAt = new Date().toISOString();
     this.datasets.unshift(dataset);
     await this.createAnnotationTask(dataset.id);
     return structuredClone(dataset);
@@ -406,6 +411,7 @@ export class MemoryRepository implements Repository {
     const approved = documents.filter((document) => document.reviewStatus === 'approved').length;
     const submitted = documents.some((document) => document.reviewStatus === 'submitted');
     dataset.status = dataset.images > 0 && approved === dataset.images ? '可训练' : submitted ? '待审核' : '标注中';
+    dataset.approvedAt = dataset.status === '可训练' ? dataset.approvedAt ?? new Date().toISOString() : undefined;
     dataset.updatedAt = new Date().toISOString();
   }
 
@@ -659,7 +665,7 @@ function mapUser(row: Record<string, unknown>): StoredUser {
 }
 
 function mapDataset(row: Record<string, unknown>): Dataset {
-  return { id: String(row.id), name: String(row.name), description: String(row.description), version: String(row.version), legacyType: row.type ? row.type as Dataset['legacyType'] : undefined, images: Number(row.images), annotated: Number(row.annotated), classes: (row.classes as string[]) ?? [], labels: Array.isArray(row.label_schema) ? row.label_schema as Dataset['labels'] : [], annotatorIds: Array.isArray(row.annotator_ids) ? row.annotator_ids as string[] : [], reviewerIds: Array.isArray(row.reviewer_ids) ? row.reviewer_ids as string[] : [], processingConfig: row.processing_config && typeof row.processing_config === 'object' ? row.processing_config as unknown as DatasetProcessingConfig : { segmentSize: 100, extractionStrategy: 'frame_step', frameStep: 1, imageQuality: 95, overlapSize: 0, useZipBlocks: false, zOrder: false }, updatedAt: displayDate(row.updated_at as string | Date), size: String(row.size), status: row.status as Dataset['status'] };
+  return { id: String(row.id), taskTypeId: row.task_type_id ? String(row.task_type_id) : undefined, createdAt: row.created_at ? new Date(row.created_at as string | Date).toISOString() : undefined, approvedAt: row.approved_at ? new Date(row.approved_at as string | Date).toISOString() : undefined, name: String(row.name), description: String(row.description), version: String(row.version), images: Number(row.images), annotated: Number(row.annotated), classes: (row.classes as string[]) ?? [], labels: Array.isArray(row.label_schema) ? row.label_schema as Dataset['labels'] : [], annotatorIds: Array.isArray(row.annotator_ids) ? row.annotator_ids as string[] : [], reviewerIds: Array.isArray(row.reviewer_ids) ? row.reviewer_ids as string[] : [], processingConfig: row.processing_config && typeof row.processing_config === 'object' ? row.processing_config as unknown as DatasetProcessingConfig : { segmentSize: 100, extractionStrategy: 'frame_step', frameStep: 1, imageQuality: 95, overlapSize: 0, useZipBlocks: false, zOrder: false }, updatedAt: displayDate(row.updated_at as string | Date), size: String(row.size), status: row.status as Dataset['status'] };
 }
 
 function mapDatasetImage(row: Record<string, unknown>): DatasetImage & { objectKey: string } {
@@ -841,7 +847,8 @@ function validateTrainingSplitIntegrity(images: Array<DatasetImage & { objectKey
 }
 
 export class PgRepository implements Repository {
-  constructor(private readonly pool: Pool) {}
+  readonly catalog: CatalogRepository;
+  constructor(private readonly pool: Pool) { this.catalog = new PgCatalogRepository(pool, mapDataset, (client) => this.refreshAllDatasetReviewStates(client)); }
   async close() { await this.pool.end(); }
   private async one<T extends Record<string, unknown>>(text: string, values: unknown[], client: PoolClient | Pool = this.pool) { const result = await client.query<T>(text, values); return result.rows[0] ?? null; }
   private async refreshDatasetReviewState(datasetId: string, client: PoolClient | Pool = this.pool) {
@@ -863,14 +870,15 @@ export class PgRepository implements Repository {
   private async refreshAllDatasetReviewStates(client: PoolClient | Pool = this.pool) {
     await client.query(`
       WITH totals AS (
-        SELECT i.dataset_id,
+        SELECT ds.id AS dataset_id,
                COUNT(i.id)::integer AS total,
                COUNT(d.image_id) FILTER (WHERE d.review_status IN ('submitted', 'approved') OR jsonb_array_length(d.annotations) > 0 OR jsonb_array_length(d.captions) > 0 OR jsonb_array_length(COALESCE(d.image_attributes->'tags', '[]'::jsonb)) > 0)::integer AS annotated,
                COUNT(d.image_id) FILTER (WHERE d.review_status = 'approved')::integer AS approved,
                COUNT(d.image_id) FILTER (WHERE d.review_status = 'submitted')::integer AS submitted
-        FROM dataset_images i
+        FROM datasets ds
+        LEFT JOIN dataset_images i ON i.dataset_id = ds.id
         LEFT JOIN annotation_documents d ON d.dataset_id = i.dataset_id AND d.image_id = i.id
-        GROUP BY i.dataset_id
+        GROUP BY ds.id
       ), calculated AS (
         SELECT dataset_id,
                annotated,
@@ -883,6 +891,7 @@ export class PgRepository implements Repository {
           updated_at = CASE WHEN d.annotated IS DISTINCT FROM calculated.annotated OR d.status IS DISTINCT FROM calculated.status THEN NOW() ELSE d.updated_at END
       FROM calculated
       WHERE d.id = calculated.dataset_id
+        AND (d.annotated IS DISTINCT FROM calculated.annotated OR d.status IS DISTINCT FROM calculated.status)
     `);
   }
   private async syncAnnotationJobsFromDocuments(datasetId: string, reviewerId: string | null, client: PoolClient | Pool = this.pool) {
@@ -1041,11 +1050,13 @@ export class PgRepository implements Repository {
   async updateSettings(input: Partial<SystemSettings>) { const settings = { ...(await this.getSettings()), ...input }; await this.pool.query('INSERT INTO system_settings(id, settings, updated_at) VALUES ($1,$2,NOW()) ON CONFLICT (id) DO UPDATE SET settings = EXCLUDED.settings, updated_at = NOW()', ['default', JSON.stringify(settings)]); return settings; }
   async listDatasets() { await this.refreshAllDatasetReviewStates(); const result = await this.pool.query('SELECT * FROM datasets ORDER BY updated_at DESC'); return result.rows.map(mapDataset); }
   async getDataset(id: string) { await this.refreshDatasetReviewState(id); const row = await this.one('SELECT * FROM datasets WHERE id = $1', [id]); return row ? mapDataset(row) : null; }
-  async createDataset(input: { name: string; description: string; version: string; classes: string[]; labels?: DatasetLabel[]; annotatorIds?: string[]; reviewerIds?: string[]; processingConfig?: DatasetProcessingConfig }) {
+  async createDataset(input: { taskTypeId: string; name: string; description: string; version: string; classes: string[]; labels?: DatasetLabel[]; annotatorIds?: string[]; reviewerIds?: string[]; processingConfig?: DatasetProcessingConfig }) {
+    if (!input.taskTypeId) throw new RepositoryStateError('TASK_TYPE_REQUIRED', '请选择业务任务');
+    await this.catalog.assertBindable(input.taskTypeId);
     const id = `dataset-${randomUUID()}`;
     const labels = input.labels?.length ? input.labels : [];
     const classes = labels.length ? labels.map((label) => label.name) : input.classes;
-    const row = await this.one('INSERT INTO datasets(id, workspace_id, name, description, version, type, images, annotated, classes, size, status, annotator_ids, reviewer_ids, processing_config, label_schema) VALUES ($1,$2,$3,$4,$5,NULL,0,0,$6,$7,$8,$9,$10,$11,$12) RETURNING *', [id, workspaceId, input.name, input.description, input.version, JSON.stringify([...new Set(classes)]), '0 B', '标注中', JSON.stringify([...new Set(input.annotatorIds ?? [])]), JSON.stringify([...new Set(input.reviewerIds ?? [])]), JSON.stringify(input.processingConfig ?? { segmentSize: 100, extractionStrategy: 'frame_step', frameStep: 1, imageQuality: 95, overlapSize: 0, useZipBlocks: false, zOrder: false }), JSON.stringify(labels)]);
+    const row = await this.one('INSERT INTO datasets(id, workspace_id, name, description, version, task_type_id, images, annotated, classes, size, status, annotator_ids, reviewer_ids, processing_config, label_schema) VALUES ($1,$2,$3,$4,$5,$13,0,0,$6,$7,$8,$9,$10,$11,$12) RETURNING *', [id, workspaceId, input.name, input.description, input.version, JSON.stringify([...new Set(classes)]), '0 B', '标注中', JSON.stringify([...new Set(input.annotatorIds ?? [])]), JSON.stringify([...new Set(input.reviewerIds ?? [])]), JSON.stringify(input.processingConfig ?? { segmentSize: 100, extractionStrategy: 'frame_step', frameStep: 1, imageQuality: 95, overlapSize: 0, useZipBlocks: false, zOrder: false }), JSON.stringify(labels), input.taskTypeId]);
     if (!row) throw new Error('Failed to create dataset');
     const dataset = mapDataset(row);
     await this.createAnnotationTask(dataset.id);

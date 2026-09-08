@@ -32,12 +32,14 @@ test('production annotation loop works through the browser', async ({ page, requ
   test.skip(!process.env.PLAYWRIGHT_BASE_URL || process.env.PLAYWRIGHT_PRODUCTION_ACCEPTANCE !== '1', 'only runs as an explicit production acceptance suite');
   const admin = await login(request, 'admin', 'acceptance-admin-password');
   const auth = { Authorization: `Bearer ${admin.accessToken}` };
+  const catalog = await json(request, '/task-categories', { headers: auth });
+  const taskType = await json(request, `/task-categories/${catalog.categories[0].id}/task-types`, { method: 'POST', headers: auth, data: { name: `浏览器测试业务-${Date.now()}` } });
   const suffix = Date.now();
   const annotatorName = `browser-annotator-${suffix}`;
   const reviewerName = `browser-reviewer-${suffix}`;
   await json(request, '/users', { method: 'POST', headers: auth, data: { username: annotatorName, displayName: '浏览器标注员', password, roles: ['annotator'] } });
   await json(request, '/users', { method: 'POST', headers: auth, data: { username: reviewerName, displayName: '浏览器审核员', password, roles: ['reviewer'] } });
-  const dataset = await json(request, '/datasets', { method: 'POST', headers: auth, data: { name: `浏览器流程-${suffix}`, description: 'production browser acceptance', version: 'v1', classes: ['defect'] } });
+  const dataset = await json(request, '/datasets', { method: 'POST', headers: auth, data: { taskTypeId: taskType.id, name: `浏览器流程-${suffix}`, description: 'production browser acceptance', version: 'v1', classes: ['defect'] } });
   const checksum = await crypto.subtle.digest('SHA-256', imageBytes).then((value) => Buffer.from(value).toString('hex'));
   const session = await json(request, `/datasets/${dataset.id}/upload-sessions`, { method: 'POST', headers: auth, data: { filename: 'browser.png', mimeType: 'image/png', sizeBytes: imageBytes.length, type: 'image', sha256: checksum } });
   await request.put(`${apiBase}/upload-sessions/${session.id}/parts/1`, { headers: { ...auth, 'content-type': 'application/octet-stream' }, data: imageBytes });

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import { describe, expect, it } from 'vitest';
 import type { AnnotationRecord } from '../shared/contracts';
-import { buildCocoDocument, buildCvatJson, buildCvatXml, buildVocXml, createDatasetExport, renderSegmentationMask, selectAnnotatedExportData, type DimensionedExportImage } from './datasetExport';
+import { buildCocoDocument, buildCvatJson, buildCvatXml, buildVocXml, createDatasetExport, renderSegmentationMask, selectAnnotatedExportData, selectFormatCompatibleExportData, type DimensionedExportImage } from './datasetExport';
 import { convertCvatPayload, parseCvatXml, validateCvatPayload } from './cvatExchange';
 
 const image: DimensionedExportImage = { id: 'image-1', objectKey: 'datasets/1/image.png', filename: 'image.png', exportFilename: '000001-image.png', mimeType: 'image/png', width: 200, height: 100, split: 'train', sourcePath: '/data/artifacts/datasets/1/image.png' };
@@ -14,6 +14,11 @@ const annotations: AnnotationRecord[] = [
 ];
 
 describe('dataset format exporters', () => {
+  it('rejects mixed incompatible geometry instead of silently dropping objects', () => {
+    const point: AnnotationRecord = { id: 'point', label: 'joint', color: '#123456', geometry: { type: 'keypoint', x: 20, y: 20, index: 1 } };
+    expect(() => selectFormatCompatibleExportData('YOLO', [image], [{ imageId: image.id, annotations: [...annotations, point] }])).toThrow('无法表达 1 个标注对象');
+    expect(selectFormatCompatibleExportData('COCO_KEYPOINTS', [image], [{ imageId: image.id, annotations: [point] }]).documents[0].annotations).toEqual([point]);
+  });
   it('blocks CVAT imports until unknown labels are mapped', () => {
     const payload = { images: [{ shapes: [{ type: 'rectangle', label: 'unknown', points: [1, 2, 3, 4] }] }] };
     expect(validateCvatPayload(payload, ['scratch']).valid).toBe(false);
